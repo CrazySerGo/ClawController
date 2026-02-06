@@ -183,18 +183,27 @@ For production, point this to your backend URL.
 
 ## Creating Agents
 
-### Via the UI
+### AI-Assisted Agent Creation (Recommended)
 
-1. Click the **Agents** tab in the sidebar
-2. Click **+ New Agent**
-3. Fill in:
-   - **ID:** Unique identifier (e.g., `dev`, `trader`, `writer`)
-   - **Name:** Display name (e.g., "Dev Agent", "Trading Bot")
-   - **Role:** One of: `lead`, `developer`, `analyst`, `specialist`, `support`
-   - **Avatar:** Emoji for the agent (e.g., 🤖, 💻, 📈)
-4. Click **Create**
+ClawController can generate agent configurations from natural language descriptions:
 
-### Via the API
+**Step 1: Describe Your Agent**
+1. Click **+ New Agent**
+2. Describe what you want: *"A market research analyst that understands long term macro while providing micro guidance"*
+3. Or click a template: `Backend Dev`, `Sales Agent`, `Researcher`
+4. Click **Generate Config**
+
+**Step 2: Review & Customize**
+The system generates:
+- **Agent ID & Name** — auto-suggested based on your description
+- **Emoji** — visual identifier
+- **Model** — recommended model (Sonnet, Opus, Haiku, etc.)
+- **SOUL.md** — personality, competencies, and behavior guidelines
+- **TOOLS.md** — available tools and integrations
+
+You can edit any field, refine the SOUL.md, or click **← Refine** to adjust your description. When ready, click **Create Agent**.
+
+### Manual Creation (API)
 
 ```bash
 curl -X POST http://localhost:8000/api/agents \
