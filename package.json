@@ -11,7 +11,7 @@
     "llm",
     "automation"
   ],
-  "author": "Mike Donan <mike@clawcontroller.com>",
+  "author": "Mike O'Nan <mike@clawcontroller.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -25,7 +25,7 @@
     "clawcontroller": "./bin/clawcontroller.js"
   },
   "scripts": {
-    "postinstall": "node ./bin/setup.js"
+    "setup": "node ./bin/setup.js"
   },
   "engines": {
     "node": ">=18.0.0"
