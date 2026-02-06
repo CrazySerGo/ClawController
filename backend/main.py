@@ -77,7 +77,7 @@ class TaskUpdate(BaseModel):
     priority: Optional[str] = None
     tags: Optional[List[str]] = None
     assignee_id: Optional[str] = None
-    reviewer: Optional[str] = None  # "jarvis" or "mike"
+    reviewer: Optional[str] = None  # "main" or "mike"
 
 class CommentCreate(BaseModel):
     content: str
@@ -222,11 +222,11 @@ View in ClawController: http://localhost:5001"""
 # Helper to notify reviewer when task needs review
 def notify_reviewer(task, submitted_by: str = None):
     """Notify reviewer when a task is submitted for review."""
-    reviewer = task.reviewer or 'jarvis'
+    reviewer = task.reviewer or 'main'
     agent_name = submitted_by or task.assignee_id or "Unknown"
     
     # Map reviewer name to agent ID
-    reviewer_agent = 'main' if reviewer in ['jarvis', 'main'] else reviewer
+    reviewer_agent = 'main' if reviewer in ['main'] else reviewer
     
     message = f"""📋 Task ready for review: {task.title}
 
@@ -234,11 +234,9 @@ def notify_reviewer(task, submitted_by: str = None):
 **Task ID:** {task.id}
 **Description:** {(task.description[:300] + '...') if task.description and len(task.description) > 300 else (task.description or 'No description')}
 
-**Actions:**
-- Approve: `curl -X POST http://localhost:8000/api/tasks/{task.id}/review -H "Content-Type: application/json" -d '{{"action": "approve"}}'`
-- Reject: `curl -X POST http://localhost:8000/api/tasks/{task.id}/review -H "Content-Type: application/json" -d '{{"action": "reject", "feedback": "Your feedback here"}}'`
+**Review Required:** Please review this task in ClawController and either approve or reject it with feedback.
 
-View in ClawController: http://localhost:5001"""
+View in ClawController: http://localhost:5001/tasks/{task.id}"""
 
     try:
         subprocess.Popen(
@@ -549,7 +547,7 @@ async def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
         tags=json.dumps(task_data.tags) if task_data.tags else "[]",
         assignee_id=assignee_id,
         status=TaskStatus.ASSIGNED if assignee_id else TaskStatus.INBOX,
-        reviewer='jarvis'  # Default reviewer is Jarvis
+        reviewer='main'  # Default reviewer is main
     )
     db.add(task)
     db.commit()
@@ -691,7 +689,7 @@ async def review_task(task_id: str, review_data: ReviewAction, db: Session = Dep
     if review_data.action == "send_to_review":
         # Move task to REVIEW with specified reviewer
         task.status = TaskStatus.REVIEW
-        task.reviewer = review_data.reviewer or "jarvis"
+        task.reviewer = review_data.reviewer or "main"
         db.commit()
         db.refresh(task)
         notify_reviewer(task)
@@ -920,7 +918,7 @@ async def add_task_activity(task_id: str, activity_data: TaskActivityCreate, db:
             new_status = TaskStatus.REVIEW
             # Set default reviewer if not set
             if not task.reviewer:
-                task.reviewer = 'jarvis'
+                task.reviewer = 'main'
     
     db.commit()
     db.refresh(activity)
@@ -968,7 +966,7 @@ async def complete_task(task_id: str, db: Session = Depends(get_db)):
     """Explicitly mark a task as complete, sending it to REVIEW.
     
     Used by agents to signal they've finished their work.
-    The task will be reviewed by the assigned reviewer (default: jarvis).
+    The task will be reviewed by the assigned reviewer (default: main).
     """
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
@@ -983,7 +981,7 @@ async def complete_task(task_id: str, db: Session = Depends(get_db)):
     old_status = task.status
     task.status = TaskStatus.REVIEW
     if not task.reviewer:
-        task.reviewer = 'jarvis'
+        task.reviewer = 'main'
     
     db.commit()
     
