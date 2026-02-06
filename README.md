@@ -45,14 +45,17 @@ Whether you're running a trading operation with specialized agents, managing a S
 
 ## Screenshots
 
-### Main Dashboard
-The kanban board shows all tasks organized by status. Drag tasks between columns to update their state.
+### SaaS Operations Dashboard
+![SaaS Dashboard](screenshots/saas-dashboard.png)
+*Manage your AI team with kanban boards, agent status monitoring, and real-time activity feeds.*
 
-### Agent Panel
-Monitor your agents at a glance. Green indicators show active agents, gray shows offline.
+### Trading Operations
+![Trading Dashboard](screenshots/trading-dashboard.png)
+*Coordinate trading agents with specialized workflows and market-focused task management.*
 
-### Squad Chat
-Send messages to specific agents using @mentions. Messages route through your agent framework.
+### Agency Workflow
+![Agency Dashboard](screenshots/agency-dashboard.png)
+*Run a creative agency with writer, designer, and specialist agents working in parallel.*
 
 ---
 
