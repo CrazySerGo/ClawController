@@ -3699,6 +3699,126 @@
   color: var(--accent);
 }
 
+/* ===== AGENT MANAGEMENT EMPTY STATE ===== */
+.agent-mgmt-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 40px;
+  text-align: center;
+  min-height: 400px;
+}
+
+.agent-mgmt-empty-icon {
+  font-size: 64px;
+  margin-bottom: 24px;
+  animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.agent-mgmt-empty h3 {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 12px;
+}
+
+.agent-mgmt-empty p {
+  font-size: 15px;
+  color: var(--muted);
+  max-width: 400px;
+  line-height: 1.6;
+  margin: 0 0 32px;
+}
+
+.agent-mgmt-init-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 28px;
+  background: linear-gradient(135deg, var(--accent), #f59e0b);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 15px rgba(224, 123, 60, 0.3);
+}
+
+.agent-mgmt-init-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(224, 123, 60, 0.4);
+}
+
+.agent-mgmt-init-button svg {
+  animation: sparkle 2s ease-in-out infinite;
+}
+
+@keyframes sparkle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.1); }
+}
+
+.agent-mgmt-empty-divider {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 24px 0;
+  width: 200px;
+}
+
+.agent-mgmt-empty-divider::before,
+.agent-mgmt-empty-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.agent-mgmt-empty-divider span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.agent-mgmt-import-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--bg-tertiary);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.agent-mgmt-import-button:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Orchestrator intro text in wizard */
+.orchestrator-intro {
+  background: linear-gradient(135deg, rgba(224, 123, 60, 0.1), rgba(245, 158, 11, 0.05));
+  border: 1px solid rgba(224, 123, 60, 0.2);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 /* ===== AGENT EDIT MODAL ===== */
 /* Override z-index for modal overlay when containing agent edit modal */
 .modal-overlay:has(.agent-edit-modal),

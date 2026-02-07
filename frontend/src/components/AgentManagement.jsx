@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Download } from 'lucide-react'
+import { Download, Sparkles } from 'lucide-react'
 import { useMissionStore } from '../store/useMissionStore'
 import AgentEditModal from './AgentEditModal'
 import AddAgentWizard from './AddAgentWizard'
@@ -57,7 +57,7 @@ function AgentCard({ agent, onClick }) {
 
 function AddAgentCard({ onClick }) {
   return (
-    <button className="agent-mgmt-card agent-mgmt-card--add" onClick={() => { console.log('🟢 Add Agent clicked'); onClick(); }}>
+    <button className="agent-mgmt-card agent-mgmt-card--add" onClick={onClick}>
       <div className="agent-mgmt-add-icon">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M12 5v14M5 12h14" />
@@ -68,14 +68,40 @@ function AddAgentCard({ onClick }) {
   )
 }
 
+function EmptyState({ onInitialize, onImport }) {
+  return (
+    <div className="agent-mgmt-empty">
+      <div className="agent-mgmt-empty-icon">🦞</div>
+      <h3>Welcome to ClawController</h3>
+      <p>Get started by creating your orchestrator agent. This will be your main agent that coordinates tasks and manages your team.</p>
+      
+      <button className="agent-mgmt-init-button" onClick={onInitialize}>
+        <Sparkles size={20} />
+        Initialize Orchestrator Agent
+      </button>
+      
+      <div className="agent-mgmt-empty-divider">
+        <span>or</span>
+      </div>
+      
+      <button className="agent-mgmt-import-button" onClick={onImport}>
+        <Download size={16} />
+        Import from OpenClaw
+      </button>
+    </div>
+  )
+}
+
 export default function AgentManagement() {
   const isOpen = useMissionStore((s) => s.isAgentManagementOpen)
   const agents = useMissionStore((s) => s.agents)
   const editingAgentId = useMissionStore((s) => s.editingAgentId)
   const isAddWizardOpen = useMissionStore((s) => s.isAddAgentWizardOpen)
+  const wizardMode = useMissionStore((s) => s.addAgentWizardMode)
   const closeAgentManagement = useMissionStore((s) => s.closeAgentManagement)
   const setEditingAgent = useMissionStore((s) => s.setEditingAgent)
   const openAddAgentWizard = useMissionStore((s) => s.openAddAgentWizard)
+  const openOrchestratorWizard = useMissionStore((s) => s.openOrchestratorWizard)
   const fetchModels = useMissionStore((s) => s.fetchModels)
   const openImportDialog = useMissionStore((s) => s.openImportDialog)
   
@@ -89,49 +115,59 @@ export default function AgentManagement() {
   if (!isOpen) return null
   
   const handleCardClick = (agentId) => {
-    console.log('🔵 AgentManagement card clicked:', agentId)
     setEditingAgent(agentId)
   }
   
+  const hasAgents = agents.length > 0
+  
   return (
     <>
-      <div className="agent-mgmt-overlay" onClick={() => { console.log('🔴 Overlay clicked - closing'); closeAgentManagement(); }} />
+      <div className="agent-mgmt-overlay" onClick={closeAgentManagement} />
       <div className="agent-mgmt-panel">
         <div className="agent-mgmt-header">
           <div className="agent-mgmt-header-left">
             <h2>🤖 Agent Management</h2>
-            <span className="agent-mgmt-count">{agents.length} agents</span>
+            {hasAgents && <span className="agent-mgmt-count">{agents.length} agents</span>}
           </div>
-          <div className="agent-mgmt-header-right">
-            <button className="import-agents-button" onClick={openImportDialog}>
-              <Download size={16} />
-              Import from OpenClaw
-            </button>
-            <button className="agent-mgmt-close" onClick={closeAgentManagement}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+          {hasAgents && (
+            <div className="agent-mgmt-header-right">
+              <button className="import-agents-button" onClick={openImportDialog}>
+                <Download size={16} />
+                Import from OpenClaw
+              </button>
+            </div>
+          )}
+          <button className="agent-mgmt-close" onClick={closeAgentManagement}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
         </div>
         
-        <div className="agent-mgmt-grid">
-          {agents.map((agent) => (
-            <AgentCard 
-              key={agent.id} 
-              agent={agent} 
-              onClick={handleCardClick}
-            />
-          ))}
-          <AddAgentCard onClick={openAddAgentWizard} />
-        </div>
+        {hasAgents ? (
+          <div className="agent-mgmt-grid">
+            {agents.map((agent) => (
+              <AgentCard 
+                key={agent.id} 
+                agent={agent} 
+                onClick={handleCardClick}
+              />
+            ))}
+            <AddAgentCard onClick={openAddAgentWizard} />
+          </div>
+        ) : (
+          <EmptyState 
+            onInitialize={openOrchestratorWizard}
+            onImport={openImportDialog}
+          />
+        )}
       </div>
       
       {/* Agent Edit Modal */}
       {editingAgentId && <AgentEditModal agentId={editingAgentId} />}
       
       {/* Add Agent Wizard */}
-      {isAddWizardOpen && <AddAgentWizard />}
+      {isAddWizardOpen && <AddAgentWizard mode={wizardMode} />}
       
       {/* Import Agents Dialog */}
       <ImportAgentsDialog />

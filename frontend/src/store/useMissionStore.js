@@ -209,6 +209,7 @@ export const useMissionStore = create((set, get) => ({
   isNotificationsOpen: false,
   isAgentManagementOpen: false,
   isAddAgentWizardOpen: false,
+  addAgentWizardMode: null, // 'describe' | 'orchestrator'
   editingAgentId: null,
   selectedAgentId: null,
   selectedRecurringTaskId: null,
@@ -459,8 +460,9 @@ export const useMissionStore = create((set, get) => ({
     isAgentManagementOpen: !state.isAgentManagementOpen,
     editingAgentId: state.isAgentManagementOpen ? null : state.editingAgentId
   })),
-  openAddAgentWizard: () => set({ isAddAgentWizardOpen: true }),
-  closeAddAgentWizard: () => set({ isAddAgentWizardOpen: false }),
+  openAddAgentWizard: () => set({ isAddAgentWizardOpen: true, addAgentWizardMode: 'describe' }),
+  openOrchestratorWizard: () => set({ isAddAgentWizardOpen: true, addAgentWizardMode: 'orchestrator' }),
+  closeAddAgentWizard: () => set({ isAddAgentWizardOpen: false, addAgentWizardMode: null }),
   setEditingAgent: (agentId) => set({ editingAgentId: agentId }),
   closeEditingAgent: () => set({ editingAgentId: null }),
   
