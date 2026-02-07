@@ -44,7 +44,8 @@ class Agent(Base):
     workspace = Column(String(500))
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    tasks = relationship("Task", back_populates="assignee")
+    tasks = relationship("Task", back_populates="assignee", foreign_keys="[Task.assignee_id]")
+    reviewed_tasks = relationship("Task", back_populates="reviewer_agent", foreign_keys="[Task.reviewer_id]")
     comments = relationship("Comment", back_populates="agent")
     messages = relationship("ChatMessage", back_populates="agent")
 
@@ -58,12 +59,14 @@ class Task(Base):
     priority = Column(SQLEnum(Priority), default=Priority.NORMAL)
     tags = Column(String(500))  # JSON array as string
     assignee_id = Column(String, ForeignKey("agents.id"), nullable=True)
-    reviewer = Column(String(50), nullable=True)  # "jarvis" or "mike" - who reviews this task
+    reviewer = Column(String(50), nullable=True)  # Legacy field - "jarvis" or "mike" - who reviews this task
+    reviewer_id = Column(String, ForeignKey("agents.id"), nullable=True, default='main')  # Agent ID for reviewer (default: main)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     due_at = Column(DateTime, nullable=True)
     
-    assignee = relationship("Agent", back_populates="tasks")
+    assignee = relationship("Agent", back_populates="tasks", foreign_keys=[assignee_id])
+    reviewer_agent = relationship("Agent", back_populates="reviewed_tasks", foreign_keys=[reviewer_id])
     comments = relationship("Comment", back_populates="task", cascade="all, delete-orphan")
     deliverables = relationship("Deliverable", back_populates="task", cascade="all, delete-orphan")
 

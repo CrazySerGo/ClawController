@@ -77,7 +77,8 @@ class TaskUpdate(BaseModel):
     priority: Optional[str] = None
     tags: Optional[List[str]] = None
     assignee_id: Optional[str] = None
-    reviewer: Optional[str] = None  # agent id or "human"
+    reviewer: Optional[str] = None  # agent id or "human" (backwards compatibility)
+    reviewer_id: Optional[str] = None  # agent id for reviewer (default: main)
 
 class CommentCreate(BaseModel):
     content: str
@@ -614,6 +615,7 @@ def get_tasks(status: Optional[str] = None, assignee_id: Optional[str] = None, d
             "assignee_id": task.assignee_id,
             "assignee": {"id": task.assignee.id, "name": task.assignee.name, "avatar": task.assignee.avatar} if task.assignee else None,
             "reviewer": task.reviewer,
+            "reviewer_id": task.reviewer_id,
             "created_at": task.created_at.isoformat(),
             "updated_at": task.updated_at.isoformat(),
             "comments_count": len(task.comments),
@@ -641,7 +643,8 @@ async def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
         tags=json.dumps(task_data.tags) if task_data.tags else "[]",
         assignee_id=assignee_id,
         status=TaskStatus.ASSIGNED if assignee_id else TaskStatus.INBOX,
-        reviewer='main'  # Default reviewer is main
+        reviewer='main',  # Default reviewer is main (backwards compatibility)
+        reviewer_id='main'  # Default reviewer_id is main
     )
     db.add(task)
     db.commit()
@@ -682,6 +685,7 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
         "assignee_id": task.assignee_id,
         "assignee": {"id": task.assignee.id, "name": task.assignee.name, "avatar": task.assignee.avatar} if task.assignee else None,
         "reviewer": task.reviewer,
+        "reviewer_id": task.reviewer_id,
         "created_at": task.created_at.isoformat(),
         "updated_at": task.updated_at.isoformat(),
         "comments": [
@@ -746,6 +750,12 @@ async def update_task(task_id: str, task_data: TaskUpdate, db: Session = Depends
             should_notify_assign = True
     if task_data.reviewer is not None:
         task.reviewer = task_data.reviewer if task_data.reviewer != "" else None
+        # Also update reviewer_id for backwards compatibility
+        task.reviewer_id = task_data.reviewer if task_data.reviewer != "" else None
+    if task_data.reviewer_id is not None:
+        task.reviewer_id = task_data.reviewer_id if task_data.reviewer_id != "" else None
+        # Also update reviewer for backwards compatibility
+        task.reviewer = task_data.reviewer_id if task_data.reviewer_id != "" else None
     
     db.commit()
     await manager.broadcast({"type": "task_updated", "data": {"id": task_id}})
@@ -797,12 +807,13 @@ async def review_task(task_id: str, review_data: ReviewAction, db: Session = Dep
     if review_data.action == "send_to_review":
         # Move task to REVIEW with specified reviewer
         task.status = TaskStatus.REVIEW
-        task.reviewer = review_data.reviewer or get_lead_agent_id(db)
+        task.reviewer_id = review_data.reviewer or get_lead_agent_id(db)
+        task.reviewer = review_data.reviewer or get_lead_agent_id(db)  # Backwards compatibility
         db.commit()
         db.refresh(task)
         notify_reviewer(task)
         await log_activity(db, "sent_to_review", task_id=task.id, 
-                          description=f"Task sent for review to {task.reviewer}")
+                          description=f"Task sent for review to {task.reviewer_id}")
     
     elif review_data.action == "approve":
         # Approve and move to DONE - ONLY reviewers can approve
@@ -810,12 +821,14 @@ async def review_task(task_id: str, review_data: ReviewAction, db: Session = Dep
             raise HTTPException(status_code=400, detail="Task is not in REVIEW status")
         
         # Validate that the task has a reviewer assigned
-        if not task.reviewer:
-            task.reviewer = get_lead_agent_id(db)  # Set default reviewer
+        if not task.reviewer_id:
+            task.reviewer_id = get_lead_agent_id(db)  # Set default reviewer
+            task.reviewer = task.reviewer_id  # Backwards compatibility
         
-        old_reviewer = task.reviewer
+        old_reviewer = task.reviewer_id
         task.status = TaskStatus.DONE
-        task.reviewer = None
+        task.reviewer_id = None
+        task.reviewer = None  # Backwards compatibility
         
         await log_activity(db, "task_approved", task_id=task.id,
                           description=f"Task approved by {old_reviewer}")
@@ -834,7 +847,7 @@ async def review_task(task_id: str, review_data: ReviewAction, db: Session = Dep
         if not review_data.feedback or not review_data.feedback.strip():
             raise HTTPException(status_code=400, detail="Feedback is required when rejecting a task")
         
-        old_reviewer = task.reviewer
+        old_reviewer = task.reviewer_id
         task.status = TaskStatus.IN_PROGRESS
         # Keep reviewer assigned so they can re-review when resubmitted
         
@@ -849,7 +862,7 @@ async def review_task(task_id: str, review_data: ReviewAction, db: Session = Dep
         # Also add to task activity log
         activity = TaskActivity(
             task_id=task_id,
-            agent_id=old_reviewer,
+            agent_id=old_reviewer or get_lead_agent_id(db),
             message=f"Task rejected with feedback: {review_data.feedback}"
         )
         db.add(activity)
@@ -868,6 +881,88 @@ async def review_task(task_id: str, review_data: ReviewAction, db: Session = Dep
     await manager.broadcast({"type": "task_reviewed", "data": {"id": task_id, "action": review_data.action}})
     
     return {"ok": True, "status": task.status.value}
+
+# Dedicated approve endpoint
+@app.post("/api/tasks/{task_id}/approve")
+async def approve_task(task_id: str, db: Session = Depends(get_db)):
+    """Approve a task in REVIEW status and move it to DONE."""
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    if task.status != TaskStatus.REVIEW:
+        raise HTTPException(status_code=400, detail="Task is not in REVIEW status")
+    
+    # Validate that the task has a reviewer assigned
+    if not task.reviewer_id:
+        task.reviewer_id = get_lead_agent_id(db)  # Set default reviewer
+        task.reviewer = task.reviewer_id  # Backwards compatibility
+    
+    old_reviewer = task.reviewer_id
+    task.status = TaskStatus.DONE
+    task.reviewer_id = None
+    task.reviewer = None  # Backwards compatibility
+    
+    await log_activity(db, "task_approved", task_id=task.id,
+                      description=f"Task approved by {old_reviewer}")
+    
+    # Notify task completion to main agent
+    db.commit()
+    db.refresh(task)
+    notify_task_completed(task, completed_by=old_reviewer)
+    
+    await manager.broadcast({"type": "task_reviewed", "data": {"id": task_id, "action": "approve"}})
+    
+    return {"ok": True, "status": TaskStatus.DONE.value}
+
+# Dedicated reject endpoint
+class RejectTaskRequest(BaseModel):
+    feedback: str
+
+@app.post("/api/tasks/{task_id}/reject")
+async def reject_task(task_id: str, reject_data: RejectTaskRequest, db: Session = Depends(get_db)):
+    """Reject a task in REVIEW status and send it back to IN_PROGRESS with feedback."""
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    if task.status != TaskStatus.REVIEW:
+        raise HTTPException(status_code=400, detail="Task is not in REVIEW status")
+    
+    # Require feedback for rejections
+    if not reject_data.feedback or not reject_data.feedback.strip():
+        raise HTTPException(status_code=400, detail="Feedback is required when rejecting a task")
+    
+    old_reviewer = task.reviewer_id
+    task.status = TaskStatus.IN_PROGRESS
+    # Keep reviewer assigned so they can re-review when resubmitted
+    
+    # Add feedback as a comment
+    comment = Comment(
+        task_id=task_id,
+        agent_id=get_lead_agent_id(db),
+        content=f"📝 Review feedback: {reject_data.feedback}"
+    )
+    db.add(comment)
+    
+    # Also add to task activity log
+    activity = TaskActivity(
+        task_id=task_id,
+        agent_id=old_reviewer or get_lead_agent_id(db),
+        message=f"Task rejected with feedback: {reject_data.feedback}"
+    )
+    db.add(activity)
+    
+    db.commit()
+    db.refresh(task)
+    notify_task_rejected(task, feedback=reject_data.feedback, rejected_by=old_reviewer)
+    
+    await log_activity(db, "task_rejected", task_id=task.id,
+                      description=f"Task sent back by {old_reviewer}: {reject_data.feedback}")
+    
+    await manager.broadcast({"type": "task_reviewed", "data": {"id": task_id, "action": "reject"}})
+    
+    return {"ok": True, "status": TaskStatus.IN_PROGRESS.value}
 
 # Comment endpoints
 def parse_mentions(content: str) -> list[str]:
