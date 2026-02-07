@@ -216,7 +216,7 @@ export default function AgentEditModal({ agentId }) {
                   <option value="">Select a model...</option>
                   {availableModels.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.alias} - {m.description}
+                      {m.id}
                     </option>
                   ))}
                 </select>
@@ -275,7 +275,7 @@ export default function AgentEditModal({ agentId }) {
                       <option value="">Select primary model...</option>
                       {availableModels.map((m) => (
                         <option key={m.id} value={m.id}>
-                          {m.alias} - {m.description}
+                          {m.id}
                         </option>
                       ))}
                     </select>
@@ -294,7 +294,7 @@ export default function AgentEditModal({ agentId }) {
                       <option value="">No fallback model</option>
                       {availableModels.map((m) => (
                         <option key={m.id} value={m.id}>
-                          {m.alias} - {m.description}
+                          {m.id}
                         </option>
                       ))}
                     </select>

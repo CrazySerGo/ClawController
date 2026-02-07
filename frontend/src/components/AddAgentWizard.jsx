@@ -291,7 +291,7 @@ export default function AddAgentWizard({ mode }) {
                     <option value="">Select model...</option>
                     {availableModels.map((model) => (
                       <option key={model.id} value={model.id}>
-                        {model.alias} - {model.description}
+                        {model.id}
                       </option>
                     ))}
                   </select>
