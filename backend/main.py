@@ -321,6 +321,83 @@ Post an activity with 'completed' or 'done' in the message - the system will aut
 async def startup():
     init_db()
     print("ClawController API started")
+    # Start background session monitor
+    asyncio.create_task(openclaw_session_monitor())
+
+async def openclaw_session_monitor():
+    """Background task that monitors OpenClaw sessions to detect agent activity.
+    
+    When an agent session is active and has an ASSIGNED task, 
+    auto-transitions to IN_PROGRESS.
+    """
+    print("OpenClaw session monitor started")
+    
+    while True:
+        try:
+            await asyncio.sleep(10)  # Check every 10 seconds
+            
+            # Get active sessions from OpenClaw
+            result = subprocess.run(
+                ["openclaw", "sessions", "list", "--json"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if result.returncode != 0:
+                continue
+                
+            sessions_data = json.loads(result.stdout)
+            active_agents = set()
+            
+            # Extract agent IDs from active sessions
+            for session in sessions_data.get("sessions", []):
+                key = session.get("key", "")
+                # Session keys look like: agent:dev:discord:channel:123
+                if key.startswith("agent:"):
+                    parts = key.split(":")
+                    if len(parts) >= 2:
+                        agent_id = parts[1]
+                        # Only count if session was updated recently (last 60 seconds)
+                        updated_at = session.get("updatedAt", 0)
+                        if time.time() * 1000 - updated_at < 60000:
+                            active_agents.add(agent_id)
+            
+            if not active_agents:
+                continue
+            
+            # Check for ASSIGNED tasks that should transition to IN_PROGRESS
+            db = SessionLocal()
+            try:
+                assigned_tasks = db.query(Task).filter(
+                    Task.status == TaskStatus.ASSIGNED,
+                    Task.assignee_id.in_(active_agents)
+                ).all()
+                
+                for task in assigned_tasks:
+                    task.status = TaskStatus.IN_PROGRESS
+                    # Log the auto-transition
+                    activity = TaskActivity(
+                        task_id=task.id,
+                        agent_id="system",
+                        message=f"⚡ Auto-transitioned to IN_PROGRESS (agent {task.assignee_id} session detected)"
+                    )
+                    db.add(activity)
+                    print(f"Session monitor: Task '{task.title}' → IN_PROGRESS (agent {task.assignee_id} active)")
+                
+                if assigned_tasks:
+                    db.commit()
+                    # Broadcast update
+                    await manager.broadcast({"type": "tasks_updated", "data": {}})
+            finally:
+                db.close()
+                
+        except json.JSONDecodeError:
+            pass  # OpenClaw output wasn't valid JSON
+        except subprocess.TimeoutExpired:
+            pass  # OpenClaw command timed out
+        except Exception as e:
+            print(f"Session monitor error: {e}")
 
 # WebSocket endpoint
 @app.websocket("/ws")
