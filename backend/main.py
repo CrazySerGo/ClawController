@@ -1783,238 +1783,118 @@ class GeneratedAgentConfig(BaseModel):
 
 @app.post("/api/agents/generate", response_model=GeneratedAgentConfig)
 def generate_agent_config(request: GenerateAgentRequest):
-    """AI-generate agent config from description (mock implementation)."""
-    desc = request.description.lower()
+    """Generate agent config by routing to main agent (if available)."""
+    home = Path.home()
+    config_path = home / ".openclaw" / "openclaw.json"
     
-    # Determine agent type based on keywords
-    if any(kw in desc for kw in ["code", "develop", "program", "software", "debug", "engineer"]):
-        return GeneratedAgentConfig(
-            id="dev-agent",
-            name="Dev Agent",
-            emoji="👨‍💻",
-            model="openai-codex/gpt-5.2",
-            soul="""# Dev Agent
+    # Check if main agent exists
+    main_agent_exists = False
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+            agents_list = config.get("agents", {}).get("list", [])
+            main_agent_exists = any(a.get("id") == "main" for a in agents_list)
+        except:
+            pass
+    
+    if main_agent_exists:
+        # Route to main agent for generation
+        prompt = f"""Generate a configuration for a new AI agent based on this description:
 
-You are a skilled software developer AI assistant.
+"{request.description}"
+
+Respond with ONLY a JSON object (no markdown, no explanation) in this exact format:
+{{
+  "id": "agent-id-lowercase-with-hyphens",
+  "name": "Agent Display Name",
+  "emoji": "single emoji",
+  "model": "anthropic/claude-sonnet-4",
+  "soul": "Full SOUL.md content with markdown formatting",
+  "tools": "Full TOOLS.md content with markdown formatting"
+}}
+
+Make the SOUL.md specific to the role described. Include relevant competencies, behaviors, and guidelines.
+Make the TOOLS.md list relevant tools and integrations for this type of agent.
+Choose an appropriate model: opus for complex reasoning, sonnet for general tasks, haiku for simple/fast tasks, codex for coding."""
+
+        try:
+            result = subprocess.run(
+                ["openclaw", "agent", "--agent", "main", "--message", prompt],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                # Try to parse JSON from response
+                response_text = result.stdout.strip()
+                
+                # Find JSON in response (might have extra text)
+                json_start = response_text.find('{')
+                json_end = response_text.rfind('}') + 1
+                
+                if json_start >= 0 and json_end > json_start:
+                    json_str = response_text[json_start:json_end]
+                    config_data = json.loads(json_str)
+                    
+                    return GeneratedAgentConfig(
+                        id=config_data.get("id", "new-agent"),
+                        name=config_data.get("name", "New Agent"),
+                        emoji=config_data.get("emoji", "🤖"),
+                        model=config_data.get("model", "anthropic/claude-sonnet-4"),
+                        soul=config_data.get("soul", "# Agent\n\nDescribe your agent here."),
+                        tools=config_data.get("tools", "# Tools\n\nList tools here."),
+                        agentsMd="# AGENTS.md\n\nStandard workspace configuration."
+                    )
+        except subprocess.TimeoutExpired:
+            print("Agent generation timed out, using fallback")
+        except json.JSONDecodeError as e:
+            print(f"Failed to parse agent response as JSON: {e}")
+        except Exception as e:
+            print(f"Agent generation failed: {e}")
+    
+    # Fallback: return blank template for user to fill in
+    # Generate a reasonable ID from the description
+    words = request.description.lower().split()[:3]
+    agent_id = "-".join(w for w in words if w.isalnum())[:20] or "new"
+    agent_id = agent_id + "-agent"
+    
+    return GeneratedAgentConfig(
+        id=agent_id,
+        name="New Agent",
+        emoji="🤖",
+        model="",
+        soul=f"""# New Agent
+
+Based on: {request.description}
+
+## Role
+Describe the agent's primary role and responsibilities.
 
 ## Core Competencies
-- Writing clean, maintainable code
-- Debugging and troubleshooting
-- Code review and optimization
-- Following best practices and design patterns
+- Competency 1
+- Competency 2
+- Competency 3
 
 ## Behavior
-- Always explain your reasoning
-- Write tests for critical code
-- Document complex logic
-- Ask clarifying questions when requirements are unclear
+- How should this agent communicate?
+- What tone should it use?
+- Any special guidelines?
 """,
-            tools="""# TOOLS.md
+        tools="""# TOOLS.md
 
 ## Available Tools
-- Code editor and file system access
-- Git operations
-- Package managers (npm, pip, etc.)
-- Terminal/shell commands
+List the tools and integrations this agent should use.
 
 ## Preferences
-- Use TypeScript over JavaScript when possible
-- Follow project conventions
-- Commit often with clear messages
+Any specific preferences or configurations.
 """,
-            agentsMd="""# AGENTS.md
-
-Standard workspace configuration for development tasks.
-Follow the guidance in SOUL.md for coding style and practices.
-"""
-        )
-    
-    elif any(kw in desc for kw in ["trade", "market", "stock", "crypto", "finance", "invest"]):
-        return GeneratedAgentConfig(
-            id="trader-agent",
-            name="Trader Agent",
-            emoji="📈",
-            model="anthropic/claude-sonnet-4",
-            soul="""# Trader Agent
-
-You are a financial analysis and trading assistant.
-
-## Core Competencies
-- Market analysis and research
-- Risk assessment
-- Portfolio management advice
-- News and sentiment analysis
-
-## Behavior
-- Always consider risk management
-- Provide data-driven insights
-- Never guarantee returns
-- Explain your analysis methodology
-""",
-            tools="""# TOOLS.md
-
-## Available Tools
-- Market data APIs
-- News aggregation
-- Charting and analysis tools
-- Portfolio tracking
-
-## Important Notes
-- All trading decisions are advisory only
-- Always emphasize risk warnings
-""",
-            agentsMd="""# AGENTS.md
-
-Standard workspace for trading and market analysis tasks.
-"""
-        )
-    
-    elif any(kw in desc for kw in ["sales", "lead", "outreach", "customer", "crm"]):
-        return GeneratedAgentConfig(
-            id="sales-agent",
-            name="Sales Agent",
-            emoji="🤝",
-            model="anthropic/claude-sonnet-4",
-            soul="""# Sales Agent
-
-You are a sales and customer relations assistant.
-
-## Core Competencies
-- Lead qualification and research
-- Outreach message crafting
-- CRM management
-- Follow-up scheduling
-
-## Behavior
-- Be professional but personable
-- Research prospects before outreach
-- Track all interactions
-- Focus on value proposition
-""",
-            tools="""# TOOLS.md
-
-## Available Tools
-- CRM integration
-- Email drafting
-- LinkedIn research
-- Calendar management
-""",
-            agentsMd="""# AGENTS.md
-
-Standard workspace for sales and lead generation tasks.
-"""
-        )
-    
-    elif any(kw in desc for kw in ["write", "content", "blog", "article", "copy"]):
-        return GeneratedAgentConfig(
-            id="writer-agent",
-            name="Writer Agent",
-            emoji="✍️",
-            model="anthropic/claude-sonnet-4",
-            soul="""# Writer Agent
-
-You are a creative writing and content assistant.
-
-## Core Competencies
-- Blog posts and articles
-- Marketing copy
-- Technical documentation
-- Editing and proofreading
-
-## Behavior
-- Adapt tone to audience
-- Research topics thoroughly
-- Use clear, engaging language
-- Follow style guides when provided
-""",
-            tools="""# TOOLS.md
-
-## Available Tools
-- Research and web search
-- Document editing
-- SEO optimization tools
-- Grammar checking
-""",
-            agentsMd="""# AGENTS.md
-
-Standard workspace for content creation tasks.
-"""
-        )
-    
-    elif any(kw in desc for kw in ["research", "analyze", "investigate", "study"]):
-        return GeneratedAgentConfig(
-            id="research-agent",
-            name="Research Agent",
-            emoji="🔍",
-            model="anthropic/claude-opus-4-5",
-            soul="""# Research Agent
-
-You are a thorough research and analysis assistant.
-
-## Core Competencies
-- Deep research and investigation
-- Data synthesis and analysis
-- Report generation
-- Source verification
-
-## Behavior
-- Always cite sources
-- Present balanced perspectives
-- Identify knowledge gaps
-- Structure findings clearly
-""",
-            tools="""# TOOLS.md
-
-## Available Tools
-- Web search and browsing
-- Document analysis
-- Data visualization
-- Note-taking systems
-""",
-            agentsMd="""# AGENTS.md
-
-Standard workspace for research tasks.
-"""
-        )
-    
-    else:
-        # Generic assistant
-        agent_id = desc.split()[0].lower().replace(" ", "-")[:20] + "-agent"
-        return GeneratedAgentConfig(
-            id=agent_id,
-            name="Assistant Agent",
-            emoji="🤖",
-            model="anthropic/claude-sonnet-4",
-            soul=f"""# Assistant Agent
-
-You are a helpful AI assistant based on: {request.description}
-
-## Core Competencies
-- Task completion and follow-through
-- Clear communication
-- Problem solving
-- Proactive assistance
-
-## Behavior
-- Be helpful and thorough
-- Ask for clarification when needed
-- Provide structured responses
-- Track progress on tasks
-""",
-            tools="""# TOOLS.md
-
-## Available Tools
-- General purpose tools
-- File system access
-- Web search
-- Communication tools
-""",
-            agentsMd="""# AGENTS.md
+        agentsMd="""# AGENTS.md
 
 Standard workspace configuration.
-Read SOUL.md for personality and behavior guidelines.
 """
-        )
+    )
 
 
 class CreateAgentRequest(BaseModel):
