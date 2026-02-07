@@ -113,7 +113,9 @@ export default function TaskModal() {
   
   const [showFeedback, setShowFeedback] = useState(false)
   const [feedback, setFeedback] = useState('')
-  const [selectedReviewer, setSelectedReviewer] = useState('main')
+  // Default to lead agent or first agent
+  const leadAgent = agents.find(a => a.role === 'LEAD') || agents[0]
+  const [selectedReviewer, setSelectedReviewer] = useState(leadAgent?.id || 'human')
   const [newComment, setNewComment] = useState('')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const fileInputRef = useRef(null)
@@ -644,13 +646,16 @@ curl -X POST http://localhost:8000/api/tasks/${task.id}/comments -H "Content-Typ
                     Send for review to:
                   </span>
                   <div className="reviewer-options">
-                    <button
-                      type="button"
-                      className={`reviewer-btn ${selectedReviewer === 'main' ? 'active' : ''}`}
-                      onClick={() => setSelectedReviewer('main')}
-                    >
-                      🤖 Agent
-                    </button>
+                    {agents.map(agent => (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        className={`reviewer-btn ${selectedReviewer === agent.id ? 'active' : ''}`}
+                        onClick={() => setSelectedReviewer(agent.id)}
+                      >
+                        {agent.avatar || '🤖'} {agent.name}
+                      </button>
+                    ))}
                     <button
                       type="button"
                       className={`reviewer-btn ${selectedReviewer === 'human' ? 'active' : ''}`}

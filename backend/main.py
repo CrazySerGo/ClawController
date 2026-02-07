@@ -144,6 +144,16 @@ async def log_activity(db: Session, activity_type: str, agent_id: str = None, ta
         }
     })
 
+# ============ Lead Agent Helper ============
+def get_lead_agent_id(db: Session) -> str:
+    """Get the ID of the lead agent (role=LEAD). Falls back to 'main' if none found."""
+    lead = db.query(Agent).filter(Agent.role == AgentRole.LEAD).first()
+    return lead.id if lead else "main"
+
+def get_lead_agent(db: Session) -> Agent:
+    """Get the lead agent object. Returns None if no agents exist."""
+    return db.query(Agent).filter(Agent.role == AgentRole.LEAD).first()
+
 # ============ Auto-Assignment Rules ============
 # Tag → Agent mapping for automatic task assignment
 # Add your own mappings here based on your agents
@@ -661,7 +671,7 @@ async def review_task(task_id: str, review_data: ReviewAction, db: Session = Dep
     if review_data.action == "send_to_review":
         # Move task to REVIEW with specified reviewer
         task.status = TaskStatus.REVIEW
-        task.reviewer = review_data.reviewer or "main"
+        task.reviewer = review_data.reviewer or get_lead_agent_id(db)
         db.commit()
         db.refresh(task)
         notify_reviewer(task)
@@ -690,7 +700,7 @@ async def review_task(task_id: str, review_data: ReviewAction, db: Session = Dep
         if review_data.feedback:
             comment = Comment(
                 task_id=task_id,
-                agent_id="main",  # Main agent
+                agent_id=get_lead_agent_id(db),
                 content=f"📝 Review feedback: {review_data.feedback}"
             )
             db.add(comment)

@@ -544,7 +544,8 @@ export const useMissionStore = create((set, get) => ({
     
     try {
       if (nextStatus === 'REVIEW') {
-        await api.reviewTask(taskId, 'send_to_review', null, reviewer || 'main')
+        // If no reviewer specified, backend will use the lead agent
+        await api.reviewTask(taskId, 'send_to_review', null, reviewer || null)
       } else {
         const backendStatus = nextStatus === 'IN PROGRESS' ? 'IN_PROGRESS' : nextStatus
         await api.updateTask(taskId, { status: backendStatus })
