@@ -1,36 +1,26 @@
 #!/bin/bash
-# ClawController v2 - Stop Script
+# ClawController - Stop Script
 # Stops both backend and frontend services
 
-echo "🛑 Stopping ClawController v2..."
+echo "🛑 Stopping ClawController..."
 
-# Unload LaunchAgents
-launchctl unload ~/Library/LaunchAgents/com.missioncontrol.backend.plist 2>/dev/null
-launchctl unload ~/Library/LaunchAgents/com.missioncontrol.frontend.plist 2>/dev/null
-
-# Kill any remaining processes
-pkill -f "uvicorn main:app.*8000" 2>/dev/null
-pkill -f "vite.*5001" 2>/dev/null
-
-sleep 1
-
-# Verify services are stopped
-BACKEND_PID=$(pgrep -f "uvicorn main:app.*8000")
-FRONTEND_PID=$(pgrep -f "vite.*5001")
-
-echo ""
-echo "Service Status:"
-if [ -z "$BACKEND_PID" ]; then
-    echo "  ✅ Backend stopped"
+# Kill backend
+BACKEND_PID=$(pgrep -f "uvicorn main:app.*8000" 2>/dev/null)
+if [ -n "$BACKEND_PID" ]; then
+    kill $BACKEND_PID 2>/dev/null
+    echo "  ✅ Backend stopped (was PID: $BACKEND_PID)"
 else
-    echo "  ⚠️  Backend still running (PID: $BACKEND_PID)"
+    echo "  ⚪ Backend not running"
 fi
 
-if [ -z "$FRONTEND_PID" ]; then
-    echo "  ✅ Frontend stopped"
+# Kill frontend
+FRONTEND_PID=$(pgrep -f "vite.*5001" 2>/dev/null)
+if [ -n "$FRONTEND_PID" ]; then
+    kill $FRONTEND_PID 2>/dev/null
+    echo "  ✅ Frontend stopped (was PID: $FRONTEND_PID)"
 else
-    echo "  ⚠️  Frontend still running (PID: $FRONTEND_PID)"
+    echo "  ⚪ Frontend not running"
 fi
 
 echo ""
-echo "ClawController v2 stopped."
+echo "ClawController stopped."
