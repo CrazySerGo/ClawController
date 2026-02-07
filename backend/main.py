@@ -202,32 +202,45 @@ View in ClawController: http://localhost:5001"""
 # Helper to notify reviewer when task needs review
 def notify_reviewer(task, submitted_by: str = None):
     """Notify reviewer when a task is submitted for review."""
-    reviewer = task.reviewer or 'main'
+    # Use reviewer_id first, fallback to reviewer field, then default to 'main'
+    reviewer_id = task.reviewer_id or task.reviewer or 'main'
     agent_name = submitted_by or task.assignee_id or "Unknown"
     
-    # Map reviewer name to agent ID
-    reviewer_agent = 'main' if reviewer in ['main'] else reviewer
+    # Build deliverables list
+    deliverables_text = ""
+    if task.deliverables:
+        deliverables_text = "\n**Deliverables:**\n"
+        for d in task.deliverables:
+            status_icon = "✅" if d.completed else "⭕"
+            deliverables_text += f"- {status_icon} {d.title}\n"
+    else:
+        deliverables_text = "\n**Deliverables:** None specified\n"
     
     message = f"""📋 Task ready for review: {task.title}
 
 **Submitted by:** {agent_name}
 **Task ID:** {task.id}
+**Status:** REVIEW
 **Description:** {(task.description[:300] + '...') if task.description and len(task.description) > 300 else (task.description or 'No description')}
-
+{deliverables_text}
 **Review Required:** Please review this task in ClawController and either approve or reject it with feedback.
+
+**Actions:**
+- Approve: `curl -X POST http://localhost:8000/api/tasks/{task.id}/approve`
+- Reject: `curl -X POST http://localhost:8000/api/tasks/{task.id}/reject -d '{{"feedback": "YOUR_FEEDBACK"}}'`
 
 View in ClawController: http://localhost:5001/tasks/{task.id}"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", reviewer_agent, "--message", message],
+            ["openclaw", "agent", "--agent", reviewer_id, "--message", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
         )
-        print(f"Notified reviewer {reviewer_agent} of task needing review: {task.title}")
+        print(f"Notified reviewer {reviewer_id} of task needing review: {task.title}")
     except Exception as e:
-        print(f"Failed to notify reviewer {reviewer_agent}: {e}")
+        print(f"Failed to notify reviewer {reviewer_id}: {e}")
 
 # Helper to notify agent when their task is rejected
 def notify_task_rejected(task, feedback: str = None, rejected_by: str = None):
@@ -718,6 +731,7 @@ async def update_task(task_id: str, task_data: TaskUpdate, db: Session = Depends
     old_status = task.status.value
     should_notify_assign = False
     should_notify_complete = False
+    should_notify_reviewer = False
     
     if task_data.title is not None:
         task.title = task_data.title
@@ -736,6 +750,9 @@ async def update_task(task_id: str, task_data: TaskUpdate, db: Session = Depends
         # Notify if status changed to ASSIGNED
         if task_data.status == "ASSIGNED" and task.assignee_id:
             should_notify_assign = True
+        # Notify reviewer if status changed to REVIEW
+        if task_data.status == "REVIEW" and old_status != "REVIEW":
+            should_notify_reviewer = True
     if task_data.priority is not None:
         task.priority = Priority(task_data.priority)
     if task_data.tags is not None:
@@ -764,6 +781,11 @@ async def update_task(task_id: str, task_data: TaskUpdate, db: Session = Depends
     if should_notify_assign:
         db.refresh(task)
         notify_agent_of_task(task)
+    
+    # Notify reviewer when task moves to REVIEW
+    if should_notify_reviewer:
+        db.refresh(task)
+        notify_reviewer(task)
     
     # Notify main agent of task completion
     if should_notify_complete:
