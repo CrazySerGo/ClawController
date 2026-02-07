@@ -1755,18 +1755,99 @@ async def trigger_recurring_task(recurring_id: str, db: Session = Depends(get_db
 
 # ============ Agent Management ============
 
-# Available models
-AVAILABLE_MODELS = [
-    {"id": "anthropic/claude-opus-4-5", "alias": "opus", "description": "Most capable, complex tasks"},
-    {"id": "anthropic/claude-sonnet-4", "alias": "sonnet", "description": "Balanced, good for writing"},
-    {"id": "anthropic/claude-3-5-haiku-latest", "alias": "haiku", "description": "Fast, cost-efficient"},
-    {"id": "openai-codex/gpt-5.2", "alias": "codex", "description": "Specialized for coding"}
-]
-
 @app.get("/api/models")
 def get_models():
-    """Return list of available models."""
-    return AVAILABLE_MODELS
+    """Return list of available models from OpenClaw config."""
+    home = Path.home()
+    config_path = home / ".openclaw" / "openclaw.json"
+    
+    # Fallback models if OpenClaw config not available
+    fallback_models = [
+        {"id": "anthropic/claude-opus-4-5", "alias": "opus", "description": "Most capable, complex tasks"},
+        {"id": "anthropic/claude-sonnet-4", "alias": "sonnet", "description": "Balanced, good for writing"},
+        {"id": "anthropic/claude-3-5-haiku-latest", "alias": "haiku", "description": "Fast, cost-efficient"},
+        {"id": "openai-codex/gpt-5.2", "alias": "codex", "description": "Specialized for coding"}
+    ]
+    
+    if not config_path.exists():
+        return fallback_models
+    
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+        
+        # Get models from providers section
+        providers = config.get("models", {}).get("providers", {})
+        available_models = []
+        seen_model_ids = set()
+        
+        # Extract models from OpenClaw config providers
+        for provider_name, provider_config in providers.items():
+            if isinstance(provider_config, dict) and "models" in provider_config:
+                models = provider_config["models"]
+                for model in models:
+                    model_id = model.get("id")
+                    model_name = model.get("name") or model_id
+                    
+                    if not model_id or model_id in seen_model_ids:
+                        continue
+                    seen_model_ids.add(model_id)
+                    
+                    # Generate alias from model name or id
+                    alias = model_id.lower()
+                    if "opus" in alias:
+                        alias = "opus"
+                    elif "sonnet" in alias:
+                        alias = "sonnet" 
+                    elif "haiku" in alias:
+                        alias = "haiku"
+                    elif "codex" in alias or "gpt" in alias:
+                        alias = "codex"
+                    elif "llama" in alias:
+                        alias = "llama"
+                    else:
+                        # Use simplified name
+                        alias = model_name.replace("-", " ").title()[:8]
+                    
+                    # Generate description
+                    description = model_name
+                    if "opus" in model_id.lower():
+                        description = "Most capable, complex tasks"
+                    elif "sonnet" in model_id.lower():
+                        description = "Balanced, good for writing"
+                    elif "haiku" in model_id.lower():
+                        description = "Fast, cost-efficient"
+                    elif "codex" in model_id.lower() or "gpt" in model_id.lower():
+                        description = "Specialized for coding"
+                    elif "llama" in model_id.lower():
+                        description = "Open source model"
+                    
+                    available_models.append({
+                        "id": model_id,
+                        "alias": alias,
+                        "description": description
+                    })
+        
+        # Also add common anthropic models that might be referenced but not listed
+        common_models = [
+            {"id": "anthropic/claude-opus-4-5", "alias": "opus", "description": "Most capable, complex tasks"},
+            {"id": "anthropic/claude-sonnet-4-20250514", "alias": "sonnet", "description": "Balanced, good for writing"},
+            {"id": "anthropic/claude-haiku-4-5", "alias": "haiku", "description": "Fast, cost-efficient"}
+        ]
+        
+        for model in common_models:
+            if model["id"] not in seen_model_ids:
+                available_models.append(model)
+        
+        # If no models found in config, return fallback
+        if not available_models:
+            return fallback_models
+            
+        return available_models
+        
+    except Exception as e:
+        print(f"Failed to read OpenClaw config for models: {e}")
+        return fallback_models
 
 
 class GenerateAgentRequest(BaseModel):
@@ -1912,7 +1993,11 @@ def create_agent(request: CreateAgentRequest):
     """Create a new agent - creates workspace and patches openclaw.json."""
     home = Path.home()
     config_path = home / ".openclaw" / "openclaw.json"
-    workspace_path = home / ".openclaw" / f"workspace-{request.id}"
+    
+    # Use new standard paths
+    agent_dir = home / ".openclaw" / "agents" / request.id
+    workspace_path = agent_dir / "workspace"
+    agent_config_dir = agent_dir / "agent"
     
     # Read existing config
     if not config_path.exists():
@@ -1931,23 +2016,21 @@ def create_agent(request: CreateAgentRequest):
     if any(a.get("id") == request.id for a in agent_list):
         raise HTTPException(status_code=400, detail=f"Agent with id '{request.id}' already exists")
     
-    # Create workspace directory
+    # Create workspace and agent directories
     workspace_path.mkdir(parents=True, exist_ok=True)
+    agent_config_dir.mkdir(parents=True, exist_ok=True)
     
-    # Write SOUL.md
-    (workspace_path / "SOUL.md").write_text(request.soul)
-    
-    # Write TOOLS.md
-    (workspace_path / "TOOLS.md").write_text(request.tools)
-    
-    # Write AGENTS.md
-    (workspace_path / "AGENTS.md").write_text(request.agentsMd)
+    # Write agent configuration files to agent directory
+    (agent_config_dir / "SOUL.md").write_text(request.soul)
+    (agent_config_dir / "TOOLS.md").write_text(request.tools)
+    (agent_config_dir / "AGENTS.md").write_text(request.agentsMd)
     
     # Create new agent config entry
     new_agent = {
         "id": request.id,
         "name": request.name,
         "workspace": str(workspace_path),
+        "agentDir": str(agent_config_dir),
         "model": {"primary": request.model},
         "identity": {"name": request.name, "emoji": request.emoji}
     }
@@ -2003,25 +2086,28 @@ def get_agent_files(agent_id: str):
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
     
-    workspace = Path(agent.get("workspace", home / ".openclaw" / f"workspace-{agent_id}"))
+    # Get agent directory (where config files are stored)
+    agent_dir = Path(agent.get("agentDir", home / ".openclaw" / f"workspace-{agent_id}"))
     
-    if not workspace.exists():
-        raise HTTPException(status_code=404, detail=f"Workspace not found: {workspace}")
+    # Fallback to old workspace structure if agentDir not specified
+    if not agent_dir.exists():
+        workspace = Path(agent.get("workspace", home / ".openclaw" / f"workspace-{agent_id}"))
+        agent_dir = workspace
     
     # Read files (with defaults if missing)
     soul = ""
     tools = ""
     agents_md = ""
     
-    soul_path = workspace / "SOUL.md"
+    soul_path = agent_dir / "SOUL.md"
     if soul_path.exists():
         soul = soul_path.read_text()
     
-    tools_path = workspace / "TOOLS.md"
+    tools_path = agent_dir / "TOOLS.md"
     if tools_path.exists():
         tools = tools_path.read_text()
     
-    agents_path = workspace / "AGENTS.md"
+    agents_path = agent_dir / "AGENTS.md"
     if agents_path.exists():
         agents_md = agents_path.read_text()
     
@@ -2056,20 +2142,26 @@ def update_agent_files(agent_id: str, request: UpdateAgentFilesRequest):
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
     
-    workspace = Path(agent.get("workspace", home / ".openclaw" / f"workspace-{agent_id}"))
+    # Get agent directory (where config files are stored)
+    agent_dir = Path(agent.get("agentDir", home / ".openclaw" / f"workspace-{agent_id}"))
     
-    if not workspace.exists():
-        workspace.mkdir(parents=True, exist_ok=True)
+    # Fallback to old workspace structure if agentDir not specified
+    if not agent_dir.exists():
+        workspace = Path(agent.get("workspace", home / ".openclaw" / f"workspace-{agent_id}"))
+        agent_dir = workspace
+    
+    if not agent_dir.exists():
+        agent_dir.mkdir(parents=True, exist_ok=True)
     
     # Update files
     if request.soul is not None:
-        (workspace / "SOUL.md").write_text(request.soul)
+        (agent_dir / "SOUL.md").write_text(request.soul)
     
     if request.tools is not None:
-        (workspace / "TOOLS.md").write_text(request.tools)
+        (agent_dir / "TOOLS.md").write_text(request.tools)
     
     if request.agentsMd is not None:
-        (workspace / "AGENTS.md").write_text(request.agentsMd)
+        (agent_dir / "AGENTS.md").write_text(request.agentsMd)
     
     return {"ok": True}
 

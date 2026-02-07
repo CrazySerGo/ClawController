@@ -106,6 +106,7 @@ export default function TaskModal() {
   const setReviewer = useMissionStore((state) => state.setReviewer)
   const updateTaskDueDate = useMissionStore((state) => state.updateTaskDueDate)
   const toggleChecklistItem = useMissionStore((state) => state.toggleChecklistItem)
+  const addDeliverable = useMissionStore((state) => state.addDeliverable)
   const addDeliverableAttachment = useMissionStore((state) => state.addDeliverableAttachment)
   const removeDeliverableAttachment = useMissionStore((state) => state.removeDeliverableAttachment)
   const addComment = useMissionStore((state) => state.addComment)
@@ -113,6 +114,7 @@ export default function TaskModal() {
   
   const [showFeedback, setShowFeedback] = useState(false)
   const [feedback, setFeedback] = useState('')
+  const [newDeliverableTitle, setNewDeliverableTitle] = useState('')
   // Default to lead agent or first agent
   const leadAgent = agents.find(a => a.role === 'LEAD') || agents[0]
   const [selectedReviewer, setSelectedReviewer] = useState(leadAgent?.id || 'human')
@@ -498,6 +500,27 @@ curl -X POST http://localhost:8000/api/tasks/${task.id}/comments -H "Content-Typ
                   </div>
                 </div>
               ))}
+              
+              {/* Add new deliverable */}
+              <div className="add-deliverable">
+                <input
+                  type="text"
+                  placeholder="Add deliverable..."
+                  value={newDeliverableTitle}
+                  onChange={(e) => setNewDeliverableTitle(e.target.value)}
+                  onKeyPress={async (e) => {
+                    if (e.key === 'Enter' && newDeliverableTitle.trim()) {
+                      try {
+                        await addDeliverable(task.id, newDeliverableTitle.trim())
+                        setNewDeliverableTitle('')
+                      } catch (error) {
+                        console.error('Failed to add deliverable:', error)
+                      }
+                    }
+                  }}
+                  className="deliverable-input"
+                />
+              </div>
             </div>
             <input
               type="file"

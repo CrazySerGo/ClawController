@@ -4919,3 +4919,32 @@
     transform: rotate(360deg);
   }
 }
+
+/* === Deliverable Input === */
+
+.add-deliverable {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.deliverable-input {
+  width: 100%;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.deliverable-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.deliverable-input::placeholder {
+  color: var(--muted);
+}

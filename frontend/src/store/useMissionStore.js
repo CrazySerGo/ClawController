@@ -943,6 +943,16 @@ export const useMissionStore = create((set, get) => ({
     }
   },
   
+  addDeliverable: async (taskId, title) => {
+    try {
+      await api.addDeliverable(taskId, title)
+      get().refreshTasks()
+    } catch (error) {
+      console.error('Failed to add deliverable:', error)
+      throw error
+    }
+  },
+  
   updateTaskDueDate: async (taskId, dueAt) => {
     // Note: Backend may need due_at endpoint - for now just update locally
     set(s => ({
