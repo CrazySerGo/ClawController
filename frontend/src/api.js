@@ -260,7 +260,7 @@ export async function fetchRecurringTaskRuns(recurringId, limit = 20) {
 
 // ============ WebSocket ============
 export function createWebSocket(onMessage, onOpen, onClose, onError) {
-  const ws = new WebSocket(WS_URL())
+  const ws = new WebSocket(getWSUrl())
 
   ws.onopen = () => {
     console.log('WebSocket connected')
