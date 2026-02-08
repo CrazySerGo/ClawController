@@ -235,7 +235,7 @@ View in ClawController: http://localhost:5001"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", "main", "--message", message],
+            ["openclaw", "agent", "--agent=main", f"--message={message}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -282,7 +282,7 @@ View in ClawController: http://localhost:5001/tasks/{task.id}"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", reviewer_id, "--message", message],
+            ["openclaw", "agent", f"--agent={reviewer_id}", f"--message={message}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -318,7 +318,7 @@ View in ClawController: http://localhost:5001"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", task.assignee_id, "--message", message],
+            ["openclaw", "agent", f"--agent={task.assignee_id}", f"--message={message}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -356,7 +356,7 @@ Post an activity with 'completed' or 'done' in the message - the system will aut
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", task.assignee_id, "--message", message],
+            ["openclaw", "agent", f"--agent={task.assignee_id}", f"--message={message}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -592,7 +592,7 @@ def get_agent_status_from_sessions(agent_id: str) -> str:
     sessions_dir = (home / ".openclaw" / "agents" / agent_id / "sessions").resolve()
     
     # Security: ensure sessions_dir is within .openclaw
-    if not str(sessions_dir).startswith(str((home / ".openclaw").resolve())):
+    if not sessions_dir.is_relative_to((home / ".openclaw").resolve()):
         return "OFFLINE"
 
     if not sessions_dir.exists():
@@ -1324,8 +1324,8 @@ curl -X POST http://localhost:8000/api/tasks/{task.id}/comments -H "Content-Type
         subprocess.Popen(
             [
                 "openclaw", "agent",
-                "--agent", agent_id,
-                "--message", message
+                f"--agent={agent_id}",
+                f"--message={message}"
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1722,8 +1722,8 @@ async def send_to_agent(data: SendToAgentRequest, db: Session = Depends(get_db))
         result = subprocess.run(
             [
                 "openclaw", "agent",
-                "--agent", agent_id,
-                "--message", message,
+                f"--agent={agent_id}",
+                f"--message={message}",
                 "--json"
             ],
             capture_output=True,
@@ -1934,9 +1934,9 @@ curl -X PATCH http://localhost:8000/api/tasks/{task_id} \\
         result = subprocess.run(
             [
                 "openclaw", "sessions", "spawn",
-                "--agent", task.assignee_id,
-                "--label", f"task-{task_id[:8]}",
-                "--message", task_message
+                f"--agent={task.assignee_id}",
+                f"--label=task-{task_id[:8]}",
+                f"--message={task_message}"
             ],
             capture_output=True,
             text=True,
@@ -1946,7 +1946,7 @@ curl -X PATCH http://localhost:8000/api/tasks/{task_id} \\
         if result.returncode != 0:
             # Fallback to direct agent command
             result = subprocess.run(
-                ["openclaw", "agent", "--agent", task.assignee_id, "--message", task_message],
+                ["openclaw", "agent", f"--agent={task.assignee_id}", f"--message={task_message}"],
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -2520,7 +2520,7 @@ Choose an appropriate model: opus for complex reasoning, sonnet for general task
 
         try:
             result = subprocess.run(
-                ["openclaw", "agent", "--agent", "main", "--message", prompt],
+                ["openclaw", "agent", "--agent=main", f"--message={prompt}"],
                 capture_output=True,
                 text=True,
                 timeout=60
@@ -2622,7 +2622,7 @@ def create_agent(request: CreateAgentRequest):
     agent_dir = (home / ".openclaw" / "agents" / request.id).resolve()
 
     # Security: ensure agent_dir is within .openclaw
-    if not str(agent_dir).startswith(str((home / ".openclaw").resolve())):
+    if not agent_dir.is_relative_to((home / ".openclaw").resolve()):
         raise HTTPException(status_code=403, detail="Access denied")
 
     workspace_path = agent_dir / "workspace"
@@ -2721,17 +2721,17 @@ def get_agent_files(agent_id: str):
     
     # Security: ensure agent_dir is within allowed locations
     allowed_agent_prefixes = [
-        str(home / ".openclaw"),
-        "/tmp"
+        home / ".openclaw",
+        Path("/tmp")
     ]
-    if not any(str(agent_dir).startswith(str(Path(p).resolve())) for p in allowed_agent_prefixes):
+    if not any(agent_dir.is_relative_to(p.resolve()) for p in allowed_agent_prefixes):
         raise HTTPException(status_code=403, detail="Access denied to agent directory")
 
     # Fallback to old workspace structure if agentDir not specified
     if not agent_dir.exists():
         workspace_raw = agent.get("workspace", str(home / ".openclaw" / f"workspace-{agent_id}"))
         workspace = Path(workspace_raw).resolve()
-        if not any(str(workspace).startswith(str(Path(p).resolve())) for p in allowed_agent_prefixes):
+        if not any(workspace.is_relative_to(p.resolve()) for p in allowed_agent_prefixes):
             raise HTTPException(status_code=403, detail="Access denied to workspace directory")
         agent_dir = workspace
     
@@ -2789,17 +2789,17 @@ def update_agent_files(agent_id: str, request: UpdateAgentFilesRequest):
     
     # Security: ensure agent_dir is within allowed locations
     allowed_agent_prefixes = [
-        str(home / ".openclaw"),
-        "/tmp"
+        home / ".openclaw",
+        Path("/tmp")
     ]
-    if not any(str(agent_dir).startswith(str(Path(p).resolve())) for p in allowed_agent_prefixes):
+    if not any(agent_dir.is_relative_to(p.resolve()) for p in allowed_agent_prefixes):
         raise HTTPException(status_code=403, detail="Access denied to agent directory")
 
     # Fallback to old workspace structure if agentDir not specified
     if not agent_dir.exists():
         workspace_raw = agent.get("workspace", str(home / ".openclaw" / f"workspace-{agent_id}"))
         workspace = Path(workspace_raw).resolve()
-        if not any(str(workspace).startswith(str(Path(p).resolve())) for p in allowed_agent_prefixes):
+        if not any(workspace.is_relative_to(p.resolve()) for p in allowed_agent_prefixes):
             raise HTTPException(status_code=403, detail="Access denied to workspace directory")
         agent_dir = workspace
     
@@ -3013,7 +3013,7 @@ View in ClawController: http://localhost:5001"""
 
         try:
             subprocess.Popen(
-                ["openclaw", "agent", "--agent", "main", "--message", message],
+                ["openclaw", "agent", "--agent=main", f"--message={message}"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 cwd=str(Path.home())
@@ -3072,8 +3072,8 @@ async def preview_file(path: str):
     
     # Security: only allow files within allowed directories and prevent traversal
     allowed_prefixes = [
-        str(Path.home() / ".openclaw"),
-        "/tmp"
+        Path.home() / ".openclaw",
+        Path("/tmp")
     ]
 
     try:
@@ -3081,7 +3081,8 @@ async def preview_file(path: str):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid path")
 
-    if not any(str(requested_path).startswith(str(Path(prefix).resolve())) for prefix in allowed_prefixes):
+    # Jail check: ensure the resolved path is strictly within one of the allowed prefixes
+    if not any(requested_path.is_relative_to(prefix.resolve()) for prefix in allowed_prefixes):
         raise HTTPException(status_code=403, detail="Access denied")
 
     if not requested_path.exists():

@@ -202,7 +202,7 @@ View in ClawController: http://localhost:5001"""
         
         try:
             subprocess.Popen(
-                ["openclaw", "agent", "--agent", "main", "--message", message],
+                ["openclaw", "agent", "--agent=main", f"--message={message}"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 cwd=str(Path.home())
