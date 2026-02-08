@@ -216,6 +216,10 @@ function SystemStatusDropdown({ onClose }) {
           <span>{error}</span>
         </div>
       )}
+      
+      <a href="/status" className="status-full-link">
+        View Full Status Page →
+      </a>
     </div>
   )
 }

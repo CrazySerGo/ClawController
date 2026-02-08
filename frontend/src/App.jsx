@@ -10,8 +10,6 @@ import KanbanBoard from './components/KanbanBoard'
 import LiveFeed from './components/LiveFeed'
 import NewTaskModal from './components/NewTaskModal'
 import RecurringTasksPanel from './components/RecurringTasksPanel'
-import StuckTaskMonitor from './components/StuckTaskMonitor'
-import GatewayWatchdog from './components/GatewayWatchdog'
 import TaskModal from './components/TaskModal'
 import { useMissionStore } from './store/useMissionStore'
 
@@ -100,8 +98,6 @@ function App() {
       <RecurringTasksPanel />
       <AgentManagement />
       <ChatWidget />
-      <StuckTaskMonitor />
-      <GatewayWatchdog />
     </div>
   )
 }
