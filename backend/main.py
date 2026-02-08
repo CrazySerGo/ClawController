@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Security, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -226,7 +228,7 @@ View in ClawController: http://localhost:5001"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", "main", "--message", "--", message],
+            ["openclaw", "agent", "--agent", "main", "--message", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -273,7 +275,7 @@ View in ClawController: http://localhost:5001/tasks/{task.id}"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", reviewer_id, "--message", "--", message],
+            ["openclaw", "agent", "--agent", reviewer_id, "--message", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -309,7 +311,7 @@ View in ClawController: http://localhost:5001"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", task.assignee_id, "--message", "--", message],
+            ["openclaw", "agent", "--agent", task.assignee_id, "--message", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -347,7 +349,7 @@ Post an activity with 'completed' or 'done' in the message - the system will aut
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", task.assignee_id, "--message", "--", message],
+            ["openclaw", "agent", "--agent", task.assignee_id, "--message", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -1224,7 +1226,7 @@ curl -X POST http://localhost:8000/api/tasks/{task.id}/comments -H "Content-Type
             [
                 "openclaw", "agent",
                 "--agent", agent_id,
-                "--message", "--", message
+                "--message", message
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1622,7 +1624,7 @@ async def send_to_agent(data: SendToAgentRequest, db: Session = Depends(get_db))
             [
                 "openclaw", "agent",
                 "--agent", agent_id,
-                "--message", "--", message,
+                "--message", message,
                 "--json"
             ],
             capture_output=True,
@@ -1835,7 +1837,7 @@ curl -X PATCH http://localhost:8000/api/tasks/{task_id} \\
                 "openclaw", "sessions", "spawn",
                 "--agent", task.assignee_id,
                 "--label", f"task-{task_id[:8]}",
-                "--message", "--", task_message
+                "--message", task_message
             ],
             capture_output=True,
             text=True,
@@ -1845,7 +1847,7 @@ curl -X PATCH http://localhost:8000/api/tasks/{task_id} \\
         if result.returncode != 0:
             # Fallback to direct agent command
             result = subprocess.run(
-                ["openclaw", "agent", "--agent", task.assignee_id, "--message", "--", task_message],
+                ["openclaw", "agent", "--agent", task.assignee_id, "--message", task_message],
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -2232,7 +2234,7 @@ def get_models():
         available_models = []
         for model in models:
             # Only include available models
-            if not model.get("available", False):
+            if not model.get("available", False) and "configured" not in model.get("tags", []):
                 continue
                 
             model_id = model.get("key")
@@ -2392,7 +2394,7 @@ Choose an appropriate model: opus for complex reasoning, sonnet for general task
 
         try:
             result = subprocess.run(
-                ["openclaw", "agent", "--agent", "main", "--message", "--", prompt],
+                ["openclaw", "agent", "--agent", "main", "--message", prompt],
                 capture_output=True,
                 text=True,
                 timeout=60
@@ -2885,7 +2887,7 @@ View in ClawController: http://localhost:5001"""
 
         try:
             subprocess.Popen(
-                ["openclaw", "agent", "--agent", "main", "--message", "--", message],
+                ["openclaw", "agent", "--agent", "main", "--message", message],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 cwd=str(Path.home())

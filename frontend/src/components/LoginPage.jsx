@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { setStoredApiKey } from '../api'
+import { setStoredApiKey, getStoredApiKey } from '../api'
 import clawLogo from '../assets/clawcontroller-logo.jpg'
 import { Key, ArrowRight, ShieldAlert } from 'lucide-react'
 
@@ -8,6 +8,13 @@ export default function LoginPage() {
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState('')
   const navigate = useNavigate()
+
+  useEffect(() => {
+    // If already has key, go home
+    if (getStoredApiKey()) {
+      navigate('/')
+    }
+  }, [navigate])
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -17,9 +24,8 @@ export default function LoginPage() {
     }
 
     setStoredApiKey(apiKey.trim())
-    navigate('/')
-    // Force a reload to re-initialize the store with the new key
-    window.location.reload()
+    // Hard redirect to home to trigger a full app re-initialization
+    window.location.href = '/'
   }
 
   return (
