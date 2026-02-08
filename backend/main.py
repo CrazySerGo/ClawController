@@ -1,5 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Security, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
@@ -11,6 +13,7 @@ import os
 import glob
 import time
 import subprocess
+import re
 
 from database import init_db, get_db, SessionLocal
 from models import (
@@ -22,6 +25,24 @@ from stuck_task_monitor import run_stuck_task_check, get_monitor_status
 from gateway_watchdog import start_gateway_watchdog, stop_gateway_watchdog, get_watchdog_status, run_health_check, manual_restart
 
 app = FastAPI(title="ClawController API", version="2.0.0")
+
+# Security
+API_KEY_NAME = "X-API-Key"
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    # Apply authentication to all /api endpoints
+    if request.url.path.startswith("/api"):
+        api_key = request.headers.get(API_KEY_NAME)
+        expected_key = os.getenv("CLAW_API_KEY", "claw-default-key")
+        if api_key != expected_key:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Invalid or missing API Key"}
+            )
+
+    response = await call_next(request)
+    return response
 
 # CORS for frontend (allow all origins for remote access)
 app.add_middleware(
@@ -184,6 +205,12 @@ def get_auto_assignee(tags: list) -> str | None:
             return ASSIGNMENT_RULES[tag_lower]
     return None
 
+# Helper to validate agent IDs for subprocess safety
+def validate_agent_id_for_cli(agent_id: str) -> str:
+    if not agent_id or not re.match(r"^[a-zA-Z0-9_-]+$", agent_id):
+        raise ValueError(f"Invalid agent ID for CLI: {agent_id}")
+    return agent_id
+
 # Helper to notify main agent when task is completed
 def notify_task_completed(task, completed_by: str = None):
     """Notify main agent when a task is marked DONE."""
@@ -199,7 +226,7 @@ View in ClawController: http://localhost:5001"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", "main", "--message", message],
+            ["openclaw", "agent", "--agent", "main", "--message", "--", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -213,6 +240,10 @@ def notify_reviewer(task, submitted_by: str = None):
     """Notify reviewer when a task is submitted for review."""
     # Use reviewer_id first, fallback to reviewer field, then default to 'main'
     reviewer_id = task.reviewer_id or task.reviewer or 'main'
+    try:
+        validate_agent_id_for_cli(reviewer_id)
+    except ValueError:
+        reviewer_id = 'main'
     agent_name = submitted_by or task.assignee_id or "Unknown"
     
     # Build deliverables list
@@ -242,7 +273,7 @@ View in ClawController: http://localhost:5001/tasks/{task.id}"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", reviewer_id, "--message", message],
+            ["openclaw", "agent", "--agent", reviewer_id, "--message", "--", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -255,6 +286,10 @@ View in ClawController: http://localhost:5001/tasks/{task.id}"""
 def notify_task_rejected(task, feedback: str = None, rejected_by: str = None):
     """Notify agent when their task is rejected and sent back."""
     if not task.assignee_id:
+        return
+    try:
+        validate_agent_id_for_cli(task.assignee_id)
+    except ValueError:
         return
     
     reviewer_name = rejected_by or "Reviewer"
@@ -274,7 +309,7 @@ View in ClawController: http://localhost:5001"""
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", task.assignee_id, "--message", message],
+            ["openclaw", "agent", "--agent", task.assignee_id, "--message", "--", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -287,6 +322,10 @@ View in ClawController: http://localhost:5001"""
 def notify_agent_of_task(task):
     """Notify agent via OpenClaw when a task is assigned to them."""
     if not task.assignee_id:
+        return
+    try:
+        validate_agent_id_for_cli(task.assignee_id)
+    except ValueError:
         return
     if task.status not in [TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS]:
         return
@@ -308,7 +347,7 @@ Post an activity with 'completed' or 'done' in the message - the system will aut
 
     try:
         subprocess.Popen(
-            ["openclaw", "agent", "--agent", task.assignee_id, "--message", message],
+            ["openclaw", "agent", "--agent", task.assignee_id, "--message", "--", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(Path.home())
@@ -403,7 +442,13 @@ async def openclaw_session_monitor():
 
 # WebSocket endpoint
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, api_key: Optional[str] = None):
+    expected_key = os.getenv("CLAW_API_KEY", "claw-default-key")
+    if api_key != expected_key:
+        await websocket.accept() # Must accept before closing with code
+        await websocket.close(code=4003)
+        return
+
     await manager.connect(websocket)
     try:
         while True:
@@ -438,9 +483,17 @@ async def update_agent_status(agent_id: str, status: str, db: Session = Depends(
 
 def get_agent_status_from_sessions(agent_id: str) -> str:
     """Determine agent status from session file activity."""
+    # Security: validate agent ID
+    if not re.match(r"^[a-zA-Z0-9_-]+$", agent_id):
+        return "OFFLINE"
+
     home = Path.home()
-    sessions_dir = home / ".openclaw" / "agents" / agent_id / "sessions"
+    sessions_dir = (home / ".openclaw" / "agents" / agent_id / "sessions").resolve()
     
+    # Security: ensure sessions_dir is within .openclaw
+    if not str(sessions_dir).startswith(str((home / ".openclaw").resolve())):
+        return "OFFLINE"
+
     if not sessions_dir.exists():
         return "STANDBY"  # Configured but never activated - ready to go
     
@@ -474,6 +527,9 @@ def get_agent_status_from_sessions(agent_id: str) -> str:
     else:
         return "STANDBY"  # Has sessions but inactive - ready to be activated
 
+class OpenClawAgentModelResponse(BaseModel):
+    primary: Optional[str] = None
+
 class OpenClawAgentResponse(BaseModel):
     id: str
     name: str
@@ -483,7 +539,7 @@ class OpenClawAgentResponse(BaseModel):
     status: str
     emoji: Optional[str] = None
     workspace: Optional[str] = None
-    model: Optional[dict] = None
+    model: Optional[OpenClawAgentModelResponse] = None
 
 @app.get("/api/openclaw/agents", response_model=List[OpenClawAgentResponse])
 def get_openclaw_agents(db: Session = Depends(get_db)):
@@ -538,13 +594,19 @@ def get_openclaw_agents(db: Session = Depends(get_db)):
         }
         
         # Get model - use agent-specific or fall back to default
-        agent_model = agent.get("model")
-        if not agent_model:
+        raw_model = agent.get("model")
+        if not raw_model:
             # Use default model from config (agents.defaults.model)
             defaults = agents_config.get("defaults", {})
-            default_model = defaults.get("model")
-            if default_model:
-                agent_model = default_model
+            raw_model = defaults.get("model")
+
+        # Filter model to only include non-sensitive fields
+        filtered_model = None
+        if raw_model:
+            if isinstance(raw_model, dict):
+                filtered_model = OpenClawAgentModelResponse(primary=raw_model.get("primary"))
+            elif isinstance(raw_model, str):
+                filtered_model = OpenClawAgentModelResponse(primary=raw_model)
         
         result.append(OpenClawAgentResponse(
             id=agent_id,
@@ -555,7 +617,7 @@ def get_openclaw_agents(db: Session = Depends(get_db)):
             status=status,
             emoji=emoji,
             workspace=agent.get("workspace"),
-            model=agent_model
+            model=filtered_model
         ))
     
     return result
@@ -1137,6 +1199,10 @@ def get_agent_id_by_name(name: str, db: Session) -> str | None:
 
 async def route_mention_to_agent(agent_id: str, task: Task, comment_content: str, commenter_name: str):
     """Send a message to an agent when @mentioned in a task comment."""
+    try:
+        validate_agent_id_for_cli(agent_id)
+    except ValueError:
+        return
     # Build context message for the agent
     message = f"""You were mentioned in a task comment.
 
@@ -1158,7 +1224,7 @@ curl -X POST http://localhost:8000/api/tasks/{task.id}/comments -H "Content-Type
             [
                 "openclaw", "agent",
                 "--agent", agent_id,
-                "--message", message
+                "--message", "--", message
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1524,6 +1590,10 @@ def get_agent_info(agent_id: str, db: Session) -> dict:
 async def send_to_agent(data: SendToAgentRequest, db: Session = Depends(get_db)):
     """Send a message to an OpenClaw agent and get the response."""
     agent_id = data.agent_id
+    try:
+        validate_agent_id_for_cli(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid agent ID")
     message = data.message
     
     if not agent_id or not message:
@@ -1552,7 +1622,7 @@ async def send_to_agent(data: SendToAgentRequest, db: Session = Depends(get_db))
             [
                 "openclaw", "agent",
                 "--agent", agent_id,
-                "--message", message,
+                "--message", "--", message,
                 "--json"
             ],
             capture_output=True,
@@ -1720,6 +1790,11 @@ async def route_task_to_agent(task_id: str, request: RouteTaskRequest = None, db
     if not task.assignee_id:
         raise HTTPException(status_code=400, detail="Task has no assignee")
     
+    try:
+        validate_agent_id_for_cli(task.assignee_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid assignee ID")
+
     # Build the task message
     task_message = f"""Task: {task.title}
 
@@ -1760,7 +1835,7 @@ curl -X PATCH http://localhost:8000/api/tasks/{task_id} \\
                 "openclaw", "sessions", "spawn",
                 "--agent", task.assignee_id,
                 "--label", f"task-{task_id[:8]}",
-                "--message", task_message
+                "--message", "--", task_message
             ],
             capture_output=True,
             text=True,
@@ -1770,7 +1845,7 @@ curl -X PATCH http://localhost:8000/api/tasks/{task_id} \\
         if result.returncode != 0:
             # Fallback to direct agent command
             result = subprocess.run(
-                ["openclaw", "agent", "--agent", task.assignee_id, "--message", task_message],
+                ["openclaw", "agent", "--agent", task.assignee_id, "--message", "--", task_message],
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -2317,7 +2392,7 @@ Choose an appropriate model: opus for complex reasoning, sonnet for general task
 
         try:
             result = subprocess.run(
-                ["openclaw", "agent", "--agent", "main", "--message", prompt],
+                ["openclaw", "agent", "--agent", "main", "--message", "--", prompt],
                 capture_output=True,
                 text=True,
                 timeout=60
@@ -2408,11 +2483,20 @@ class CreateAgentRequest(BaseModel):
 @app.post("/api/agents")
 def create_agent(request: CreateAgentRequest):
     """Create a new agent - creates workspace and patches openclaw.json."""
+    # Security: validate agent ID to prevent path traversal
+    if not re.match(r"^[a-zA-Z0-9_-]+$", request.id):
+        raise HTTPException(status_code=400, detail="Invalid agent ID. Only alphanumeric, underscores, and hyphens allowed.")
+
     home = Path.home()
     config_path = home / ".openclaw" / "openclaw.json"
     
     # Use new standard paths
-    agent_dir = home / ".openclaw" / "agents" / request.id
+    agent_dir = (home / ".openclaw" / "agents" / request.id).resolve()
+
+    # Security: ensure agent_dir is within .openclaw
+    if not str(agent_dir).startswith(str((home / ".openclaw").resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     workspace_path = agent_dir / "workspace"
     agent_config_dir = agent_dir / "agent"
     
@@ -2504,11 +2588,23 @@ def get_agent_files(agent_id: str):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
     
     # Get agent directory (where config files are stored)
-    agent_dir = Path(agent.get("agentDir", home / ".openclaw" / f"workspace-{agent_id}"))
+    agent_dir_raw = agent.get("agentDir", str(home / ".openclaw" / f"workspace-{agent_id}"))
+    agent_dir = Path(agent_dir_raw).resolve()
     
+    # Security: ensure agent_dir is within allowed locations
+    allowed_agent_prefixes = [
+        str(home / ".openclaw"),
+        "/tmp"
+    ]
+    if not any(str(agent_dir).startswith(str(Path(p).resolve())) for p in allowed_agent_prefixes):
+        raise HTTPException(status_code=403, detail="Access denied to agent directory")
+
     # Fallback to old workspace structure if agentDir not specified
     if not agent_dir.exists():
-        workspace = Path(agent.get("workspace", home / ".openclaw" / f"workspace-{agent_id}"))
+        workspace_raw = agent.get("workspace", str(home / ".openclaw" / f"workspace-{agent_id}"))
+        workspace = Path(workspace_raw).resolve()
+        if not any(str(workspace).startswith(str(Path(p).resolve())) for p in allowed_agent_prefixes):
+            raise HTTPException(status_code=403, detail="Access denied to workspace directory")
         agent_dir = workspace
     
     # Read files (with defaults if missing)
@@ -2560,11 +2656,23 @@ def update_agent_files(agent_id: str, request: UpdateAgentFilesRequest):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
     
     # Get agent directory (where config files are stored)
-    agent_dir = Path(agent.get("agentDir", home / ".openclaw" / f"workspace-{agent_id}"))
+    agent_dir_raw = agent.get("agentDir", str(home / ".openclaw" / f"workspace-{agent_id}"))
+    agent_dir = Path(agent_dir_raw).resolve()
     
+    # Security: ensure agent_dir is within allowed locations
+    allowed_agent_prefixes = [
+        str(home / ".openclaw"),
+        "/tmp"
+    ]
+    if not any(str(agent_dir).startswith(str(Path(p).resolve())) for p in allowed_agent_prefixes):
+        raise HTTPException(status_code=403, detail="Access denied to agent directory")
+
     # Fallback to old workspace structure if agentDir not specified
     if not agent_dir.exists():
-        workspace = Path(agent.get("workspace", home / ".openclaw" / f"workspace-{agent_id}"))
+        workspace_raw = agent.get("workspace", str(home / ".openclaw" / f"workspace-{agent_id}"))
+        workspace = Path(workspace_raw).resolve()
+        if not any(str(workspace).startswith(str(Path(p).resolve())) for p in allowed_agent_prefixes):
+            raise HTTPException(status_code=403, detail="Access denied to workspace directory")
         agent_dir = workspace
     
     if not agent_dir.exists():
@@ -2777,7 +2885,7 @@ View in ClawController: http://localhost:5001"""
 
         try:
             subprocess.Popen(
-                ["openclaw", "agent", "--agent", "main", "--message", message],
+                ["openclaw", "agent", "--agent", "main", "--message", "--", message],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 cwd=str(Path.home())
@@ -2834,22 +2942,28 @@ async def preview_file(path: str):
     import mimetypes
     from fastapi.responses import FileResponse, PlainTextResponse
     
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="File not found")
-    
-    # Security: only allow files within allowed directories
+    # Security: only allow files within allowed directories and prevent traversal
     allowed_prefixes = [
         str(Path.home() / ".openclaw"),
         "/tmp"
     ]
-    if not any(path.startswith(prefix) for prefix in allowed_prefixes):
+
+    try:
+        requested_path = Path(path).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not any(str(requested_path).startswith(str(Path(prefix).resolve())) for prefix in allowed_prefixes):
         raise HTTPException(status_code=403, detail="Access denied")
+
+    if not requested_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
     
-    mime_type, _ = mimetypes.guess_type(path)
+    mime_type, _ = mimetypes.guess_type(str(requested_path))
     
     # For text files, return content directly
-    if mime_type and mime_type.startswith("text/") or path.endswith(('.txt', '.md', '.json', '.yaml', '.yml', '.py', '.js', '.jsx', '.ts', '.tsx', '.css', '.html')):
-        with open(path, 'r') as f:
+    if mime_type and mime_type.startswith("text/") or str(requested_path).endswith(('.txt', '.md', '.json', '.yaml', '.yml', '.py', '.js', '.jsx', '.ts', '.tsx', '.css', '.html')):
+        with open(requested_path, 'r') as f:
             content = f.read()
         return PlainTextResponse(content)
     

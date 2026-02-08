@@ -2,7 +2,8 @@
 // Dynamically determine API URL based on current host
 const currentHost = window.location.hostname
 const API_BASE = `http://${currentHost}:8000`
-const WS_URL = `ws://${currentHost}:8000/ws`
+const API_KEY = import.meta.env?.VITE_CLAW_API_KEY || 'claw-default-key'
+const WS_URL = `ws://${currentHost}:8000/ws?api_key=${API_KEY}`
 
 // Generic fetch wrapper with error handling
 async function fetchAPI(endpoint, options = {}) {
@@ -10,6 +11,7 @@ async function fetchAPI(endpoint, options = {}) {
   const config = {
     headers: {
       'Content-Type': 'application/json',
+      'X-API-Key': API_KEY,
       ...options.headers,
     },
     ...options,
