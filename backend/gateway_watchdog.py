@@ -86,11 +86,13 @@ class GatewayWatchdog:
                 # Parse status output to verify gateway is actually running
                 try:
                     status_data = json.loads(stdout.decode())
-                    gateway_status = status_data.get("gateway", {}).get("status", "unknown")
-                    if gateway_status == "running":
+                    gateway_info = status_data.get("gateway", {})
+                    is_reachable = gateway_info.get("reachable", False)
+                    if is_reachable:
                         return True, "Gateway healthy"
                     else:
-                        return False, f"Gateway status: {gateway_status}"
+                        error = gateway_info.get("error", "unreachable")
+                        return False, f"Gateway status: {error}"
                 except json.JSONDecodeError:
                     return False, "Gateway responding but status unreadable"
             else:
