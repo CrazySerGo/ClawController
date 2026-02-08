@@ -95,6 +95,9 @@ class Task(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     due_at = Column(DateTime, nullable=True)
+    task_definition = Column(Text, nullable=True)
+    parameters = Column(Text, nullable=True)
+    owner_id = Column(String(100), nullable=True)
     
     assignee = relationship("Agent", back_populates="tasks", foreign_keys=[assignee_id])
     reviewer_agent = relationship("Agent", back_populates="reviewed_tasks", foreign_keys=[reviewer_id])
@@ -172,6 +175,9 @@ class RecurringTask(Base):
     last_run_at = Column(DateTime, nullable=True)
     next_run_at = Column(DateTime, nullable=True)
     run_count = Column(Integer, default=0)
+    task_definition = Column(Text, nullable=True)
+    parameters = Column(Text, nullable=True)
+    owner_id = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     runs = relationship("RecurringTaskRun", back_populates="recurring_task", cascade="all, delete-orphan")
@@ -182,7 +188,7 @@ class RecurringTaskRun(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     recurring_task_id = Column(String, ForeignKey("recurring_tasks.id"), nullable=False)
     task_id = Column(String, ForeignKey("tasks.id"), nullable=True)  # The spawned task
-    run_at = Column(DateTime, default=datetime.utcnow)
+    execution_time = Column(DateTime, default=datetime.utcnow)
     status = Column(String(50), default="success")  # success, failed
     
     recurring_task = relationship("RecurringTask", back_populates="runs")
