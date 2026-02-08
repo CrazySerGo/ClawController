@@ -39,6 +39,9 @@ def _run_migrations():
         task_migrations = [
             ("reviewer_id", "VARCHAR", None),
             ("due_at", "DATETIME", None),
+            ("task_definition", "TEXT", None),
+            ("parameters", "TEXT", None),
+            ("owner_id", "VARCHAR", None),
         ]
         
         for col_name, col_type, default in task_migrations:
@@ -74,6 +77,43 @@ def _run_migrations():
                     print(f"Migration: Added '{col_name}' column to agents table")
                 except Exception as e:
                     print(f"Migration warning for {col_name}: {e}")
+
+        # Get existing columns in recurring_tasks table
+        result = conn.execute(text("PRAGMA table_info(recurring_tasks)"))
+        rt_columns = [row[1] for row in result.fetchall()]
+
+        rt_migrations = [
+            ("task_definition", "TEXT", None),
+            ("parameters", "TEXT", None),
+            ("owner_id", "VARCHAR", None),
+        ]
+
+        for col_name, col_type, default in rt_migrations:
+            if col_name not in rt_columns:
+                try:
+                    sql = f"ALTER TABLE recurring_tasks ADD COLUMN {col_name} {col_type}"
+                    if default is not None:
+                        sql += f" DEFAULT {default}"
+                    conn.execute(text(sql))
+                    print(f"Migration: Added '{col_name}' column to recurring_tasks table")
+                except Exception as e:
+                    print(f"Migration warning for {col_name}: {e}")
+
+        # Get existing columns in recurring_task_runs table
+        result = conn.execute(text("PRAGMA table_info(recurring_task_runs)"))
+        run_columns = [row[1] for row in result.fetchall()]
+
+        if "execution_time" not in run_columns:
+            try:
+                # If run_at exists, we could try to rename it, but simpler to just add execution_time
+                conn.execute(text("ALTER TABLE recurring_task_runs ADD COLUMN execution_time DATETIME"))
+                print("Migration: Added 'execution_time' column to recurring_task_runs table")
+                # Copy data if run_at exists
+                if "run_at" in run_columns:
+                    conn.execute(text("UPDATE recurring_task_runs SET execution_time = run_at"))
+                    print("Migration: Copied data from 'run_at' to 'execution_time'")
+            except Exception as e:
+                print(f"Migration warning for execution_time: {e}")
         
         conn.commit()
 

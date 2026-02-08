@@ -16,6 +16,7 @@ import glob
 import time
 import subprocess
 import re
+from croniter import croniter
 
 from database import init_db, get_db, SessionLocal
 from models import (
@@ -135,9 +136,12 @@ class RecurringTaskCreate(BaseModel):
     priority: str = "NORMAL"
     tags: Optional[List[str]] = []
     assignee_id: Optional[str] = None
-    schedule_type: str  # daily, weekly, hourly, cron
-    schedule_value: Optional[str] = None  # cron expression, hours, or comma-separated days
+    schedule_type: str  # daily, weekly, hourly, cron, interval
+    schedule_value: Optional[str] = None  # cron expression, hours, days, or seconds
     schedule_time: Optional[str] = None  # HH:MM format
+    task_definition: Optional[str] = None
+    parameters: Optional[str] = None
+    owner_id: Optional[str] = None
 
 class RecurringTaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -149,6 +153,9 @@ class RecurringTaskUpdate(BaseModel):
     schedule_value: Optional[str] = None
     schedule_time: Optional[str] = None
     is_active: Optional[bool] = None
+    task_definition: Optional[str] = None
+    parameters: Optional[str] = None
+    owner_id: Optional[str] = None
 
 class TaskActivityCreate(BaseModel):
     agent_id: str
@@ -366,6 +373,7 @@ async def startup():
     # Start background monitors
     asyncio.create_task(openclaw_session_monitor())
     asyncio.create_task(start_gateway_watchdog())
+    asyncio.create_task(recurring_task_scheduler())
 
 async def openclaw_session_monitor():
     """Background task that monitors OpenClaw sessions to detect agent activity.
@@ -441,6 +449,97 @@ async def openclaw_session_monitor():
             pass  # OpenClaw command timed out
         except Exception as e:
             print(f"Session monitor error: {e}")
+
+async def recurring_task_scheduler():
+    """Background task that polls for due recurring tasks and spawns new tasks."""
+    print("Recurring task scheduler started")
+
+    while True:
+        try:
+            await asyncio.sleep(45)  # Poll every 45 seconds
+
+            db = SessionLocal()
+            try:
+                now = datetime.utcnow()
+                # Find active recurring tasks that are due
+                due_tasks = db.query(RecurringTask).filter(
+                    RecurringTask.is_active == True,
+                    RecurringTask.next_run_at <= now
+                ).all()
+
+                for rt in due_tasks:
+                    try:
+                        # Spawn new task
+                        task = Task(
+                            title=rt.title,
+                            description=rt.description,
+                            priority=rt.priority,
+                            tags=rt.tags,
+                            assignee_id=rt.assignee_id,
+                            status=TaskStatus.ASSIGNED if rt.assignee_id else TaskStatus.INBOX,
+                            reviewer_id='main',
+                            reviewer='main',
+                            task_definition=rt.task_definition,
+                            parameters=rt.parameters,
+                            owner_id=rt.owner_id
+                        )
+                        db.add(task)
+                        db.flush() # Get task ID
+
+                        # Record the run
+                        run = RecurringTaskRun(
+                            recurring_task_id=rt.id,
+                            task_id=task.id,
+                            execution_time=now,
+                            status="success"
+                        )
+                        db.add(run)
+
+                        # Update recurring task
+                        rt.last_run_at = now
+                        rt.run_count += 1
+                        rt.next_run_at = calculate_next_run(rt.schedule_type, rt.schedule_value, rt.schedule_time)
+
+                        db.commit()
+
+                        print(f"Scheduler: Spawned task '{task.title}' from recurring task {rt.id}")
+
+                        # Log to general activity feed
+                        await log_activity(
+                            db,
+                            "task_created",
+                            task_id=task.id,
+                            description=f"Task spawned from recurring schedule: {task.title}"
+                        )
+
+                        # Broadcast
+                        await manager.broadcast({"type": "task_created", "data": {"id": task.id, "title": task.title}})
+                        await manager.broadcast({"type": "recurring_run", "data": {"id": rt.id, "task_id": task.id}})
+
+                        # Notify assignee if any
+                        if task.assignee_id:
+                            notify_agent_of_task(task)
+
+                    except Exception as e:
+                        db.rollback()
+                        print(f"Error processing recurring task {rt.id}: {e}")
+                        # Record failure
+                        try:
+                            run = RecurringTaskRun(
+                                recurring_task_id=rt.id,
+                                status="failed",
+                                execution_time=now
+                            )
+                            db.add(run)
+                            db.commit()
+                        except:
+                            db.rollback()
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            print(f"Recurring task scheduler error: {e}")
 
 # WebSocket endpoint
 @app.websocket("/ws")
@@ -1905,10 +2004,19 @@ def calculate_next_run(schedule_type: str, schedule_value: str, schedule_time: s
         hours = int(schedule_value) if schedule_value else 1
         return now + timedelta(hours=hours)
     
+    elif schedule_type == "interval":
+        # schedule_value contains the interval in seconds
+        seconds = int(schedule_value) if schedule_value else 60
+        return now + timedelta(seconds=seconds)
+
     elif schedule_type == "cron":
-        # For cron, we'd need a cron parser library
-        # For now, default to daily
-        # TODO: Integrate with OpenClaw's cron system
+        if schedule_value:
+            try:
+                iter = croniter(schedule_value, now)
+                return iter.get_next(datetime)
+            except Exception as e:
+                print(f"Error calculating next cron run: {e}")
+                return now + timedelta(days=1)
         return now + timedelta(days=1)
     
     return now + timedelta(days=1)
@@ -1964,6 +2072,9 @@ def list_recurring_tasks(db: Session = Depends(get_db)):
             "last_run_at": rt.last_run_at.isoformat() if rt.last_run_at else None,
             "next_run_at": rt.next_run_at.isoformat() if rt.next_run_at else None,
             "run_count": rt.run_count,
+            "task_definition": rt.task_definition,
+            "parameters": rt.parameters,
+            "owner_id": rt.owner_id,
             "created_at": rt.created_at.isoformat()
         })
     return result
@@ -1986,7 +2097,10 @@ async def create_recurring_task(task_data: RecurringTaskCreate, db: Session = De
         schedule_type=task_data.schedule_type,
         schedule_value=task_data.schedule_value,
         schedule_time=task_data.schedule_time,
-        next_run_at=next_run
+        next_run_at=next_run,
+        task_definition=task_data.task_definition,
+        parameters=task_data.parameters,
+        owner_id=task_data.owner_id
     )
     db.add(recurring_task)
     db.commit()
@@ -2030,6 +2144,9 @@ def get_recurring_task(recurring_id: str, db: Session = Depends(get_db)):
         "last_run_at": rt.last_run_at.isoformat() if rt.last_run_at else None,
         "next_run_at": rt.next_run_at.isoformat() if rt.next_run_at else None,
         "run_count": rt.run_count,
+        "task_definition": rt.task_definition,
+        "parameters": rt.parameters,
+        "owner_id": rt.owner_id,
         "created_at": rt.created_at.isoformat()
     }
 
@@ -2058,31 +2175,37 @@ async def update_recurring_task(recurring_id: str, task_data: RecurringTaskUpdat
         rt.schedule_time = task_data.schedule_time
     if task_data.is_active is not None:
         rt.is_active = task_data.is_active
+    if task_data.task_definition is not None:
+        rt.task_definition = task_data.task_definition
+    if task_data.parameters is not None:
+        rt.parameters = task_data.parameters
+    if task_data.owner_id is not None:
+        rt.owner_id = task_data.owner_id
         
-        # When pausing, remove incomplete spawned tasks from the board
-        if not task_data.is_active:
-            # Find all tasks spawned from this recurring task that aren't complete
-            runs = db.query(RecurringTaskRun).filter(
-                RecurringTaskRun.recurring_task_id == recurring_id
-            ).all()
-            
-            deleted_task_ids = []
-            for run in runs:
-                if run.task_id:
-                    task = db.query(Task).filter(Task.id == run.task_id).first()
-                    if task and task.status not in [TaskStatus.COMPLETE]:
-                        deleted_task_ids.append(task.id)
-                        db.delete(task)
-            
-            # Also delete the run records for deleted tasks
-            for task_id in deleted_task_ids:
-                db.query(RecurringTaskRun).filter(
-                    RecurringTaskRun.task_id == task_id
-                ).delete()
-            
-            # Broadcast task deletions
-            for task_id in deleted_task_ids:
-                await manager.broadcast({"type": "task_deleted", "data": {"id": task_id}})
+    # When pausing, remove incomplete spawned tasks from the board
+    if task_data.is_active is False:
+        # Find all tasks spawned from this recurring task that aren't complete
+        runs = db.query(RecurringTaskRun).filter(
+            RecurringTaskRun.recurring_task_id == recurring_id
+        ).all()
+
+        deleted_task_ids = []
+        for run in runs:
+            if run.task_id:
+                task = db.query(Task).filter(Task.id == run.task_id).first()
+                if task and task.status not in [TaskStatus.DONE]:
+                    deleted_task_ids.append(task.id)
+                    db.delete(task)
+
+        # Also delete the run records for deleted tasks
+        for task_id in deleted_task_ids:
+            db.query(RecurringTaskRun).filter(
+                RecurringTaskRun.task_id == task_id
+            ).delete()
+
+        # Broadcast task deletions
+        for task_id in deleted_task_ids:
+            await manager.broadcast({"type": "task_deleted", "data": {"id": task_id}})
     
     # Recalculate next run if schedule changed
     if any([task_data.schedule_type, task_data.schedule_value, task_data.schedule_time]):
@@ -2141,7 +2264,7 @@ def get_recurring_task_runs(recurring_id: str, limit: int = 20, db: Session = De
     
     runs = db.query(RecurringTaskRun).filter(
         RecurringTaskRun.recurring_task_id == recurring_id
-    ).order_by(RecurringTaskRun.run_at.desc()).limit(limit).all()
+    ).order_by(RecurringTaskRun.execution_time.desc()).limit(limit).all()
     
     result = []
     for run in runs:
@@ -2157,7 +2280,8 @@ def get_recurring_task_runs(recurring_id: str, limit: int = 20, db: Session = De
         
         result.append({
             "id": run.id,
-            "run_at": run.run_at.isoformat(),
+            "execution_time": run.execution_time.isoformat(),
+            "run_at": run.execution_time.isoformat(), # Backwards compatibility for frontend
             "status": run.status,
             "task": task
         })
@@ -2187,6 +2311,7 @@ async def trigger_recurring_task(recurring_id: str, db: Session = Depends(get_db
     run = RecurringTaskRun(
         recurring_task_id=recurring_id,
         task_id=task.id,
+        execution_time=datetime.utcnow(),
         status="success"
     )
     db.add(run)
@@ -2205,7 +2330,8 @@ async def trigger_recurring_task(recurring_id: str, db: Session = Depends(get_db
     return {
         "ok": True,
         "task_id": task.id,
-        "run_at": run.run_at.isoformat()
+        "execution_time": run.execution_time.isoformat(),
+        "run_at": run.execution_time.isoformat() # Backwards compatibility
     }
 
 # ============ Agent Management ============
