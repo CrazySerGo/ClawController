@@ -2,16 +2,25 @@
 // Dynamically determine API URL based on current host
 const currentHost = window.location.hostname
 const API_BASE = `http://${currentHost}:8000`
-const API_KEY = import.meta.env?.VITE_CLAW_API_KEY || 'claw-default-key'
-const WS_URL = `ws://${currentHost}:8000/ws?api_key=${API_KEY}`
+
+export const getStoredApiKey = () => localStorage.getItem('CLAW_API_KEY')
+export const setStoredApiKey = (key) => localStorage.setItem('CLAW_API_KEY', key)
+export const clearStoredApiKey = () => localStorage.removeItem('CLAW_API_KEY')
+
+const getWSUrl = () => {
+  const key = getStoredApiKey() || 'claw-default-key'
+  return `ws://${currentHost}:8000/ws?api_key=${key}`
+}
 
 // Generic fetch wrapper with error handling
 async function fetchAPI(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`
+  const apiKey = getStoredApiKey() || 'claw-default-key'
+
   const config = {
     headers: {
       'Content-Type': 'application/json',
-      'X-API-Key': API_KEY,
+      'X-API-Key': apiKey,
       ...options.headers,
     },
     ...options,
@@ -19,6 +28,12 @@ async function fetchAPI(endpoint, options = {}) {
 
   try {
     const response = await fetch(url, config)
+    if (response.status === 401 || response.status === 403) {
+      clearStoredApiKey()
+      window.location.href = '/login'
+      throw new Error('Authentication failed')
+    }
+
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: 'Request failed' }))
       throw new Error(error.detail || `HTTP ${response.status}`)
@@ -245,7 +260,7 @@ export async function fetchRecurringTaskRuns(recurringId, limit = 20) {
 
 // ============ WebSocket ============
 export function createWebSocket(onMessage, onOpen, onClose, onError) {
-  const ws = new WebSocket(WS_URL)
+  const ws = new WebSocket(WS_URL())
 
   ws.onopen = () => {
     console.log('WebSocket connected')
@@ -317,7 +332,7 @@ export async function deleteAgentConfig(agentId) {
   })
 }
 
-export { API_BASE, WS_URL }
+export { API_BASE, getWSUrl as WS_URL }
 
 // Generic API object for simple get/post calls
 export const api = {
