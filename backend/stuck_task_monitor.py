@@ -174,31 +174,13 @@ class StuckTaskMonitor:
         task_state = self.state["stuck_tasks"].get(task.id, {})
         consecutive_count = task_state.get("consecutive_count", 0) + 1
         
-        # Build notification message
+        # Build notification message following V3 spec
         if consecutive_count == 1:
-            urgency = "🟡 Task Stuck Alert"
+            urgency = "🟡 ALERT"
         else:
-            urgency = "🔴 PERSISTENT Stuck Task Alert"
+            urgency = "🔴 PERSISTENT ALERT"
         
-        assignee_info = f"\n**Assignee:** {stuck_info['assignee_name']} ({stuck_info['assignee_id']})" if stuck_info['assignee_id'] else "\n**Assignee:** Unassigned"
-        
-        message = f"""{urgency}
-
-**Task:** {stuck_info['title']}
-**Status:** {stuck_info['status']} for {stuck_info['time_stuck_hours']} hours{assignee_info}
-**Priority:** {stuck_info['priority']}
-**Task ID:** {stuck_info['task_id']}
-
-**Threshold exceeded:** {stuck_info['threshold_hours']} hours
-**Consecutive detections:** {consecutive_count}
-
-**Possible actions:**
-- Check if agent is available and responsive
-- Reassign task to another agent  
-- Update task status or priority
-- Add clarifying comments or instructions
-
-View in ClawController: http://localhost:5001"""
+        message = f"{urgency}: Task {stuck_info['task_id']} ({stuck_info['title']}) has been stuck in {stuck_info['status']} for {stuck_info['time_stuck_hours']} hours. Reassignment or manual check required."
         
         try:
             subprocess.Popen(

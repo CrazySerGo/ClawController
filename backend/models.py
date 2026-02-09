@@ -17,6 +17,7 @@ class TaskStatus(str, enum.Enum):
     IN_PROGRESS = "IN_PROGRESS"
     REVIEW = "REVIEW"
     DONE = "DONE"
+    CANCELED = "CANCELED"
 
 class Priority(str, enum.Enum):
     NORMAL = "NORMAL"

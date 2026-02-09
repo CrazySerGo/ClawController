@@ -2245,29 +2245,23 @@ async def update_recurring_task(recurring_id: str, task_data: RecurringTaskUpdat
     else:
         remove_recurring_task_from_scheduler(rt.id)
         rt.next_run_at = None
-        
-        # When pausing, remove incomplete spawned tasks from the board
+
+        # When pausing, mark incomplete spawned tasks as CANCELED
         runs = db.query(RecurringTaskRun).filter(
             RecurringTaskRun.recurring_task_id == recurring_id
         ).all()
 
-        deleted_task_ids = []
+        canceled_task_ids = []
         for run in runs:
             if run.task_id:
                 task = db.query(Task).filter(Task.id == run.task_id).first()
-                if task and task.status not in [TaskStatus.DONE]:
-                    deleted_task_ids.append(task.id)
-                    db.delete(task)
+                if task and task.status not in [TaskStatus.DONE, TaskStatus.CANCELED]:
+                    task.status = TaskStatus.CANCELED
+                    canceled_task_ids.append(task.id)
 
-        # Also delete the run records for deleted tasks
-        for task_id in deleted_task_ids:
-            db.query(RecurringTaskRun).filter(
-                RecurringTaskRun.task_id == task_id
-            ).delete()
-
-        # Broadcast task deletions
-        for task_id in deleted_task_ids:
-            await manager.broadcast({"type": "task_deleted", "data": {"id": task_id}})
+        # Broadcast task updates
+        for task_id in canceled_task_ids:
+            await manager.broadcast({"type": "task_updated", "data": {"id": task_id, "status": "CANCELED"}})
     
     db.commit()
     await manager.broadcast({"type": "recurring_updated", "data": {"id": recurring_id}})
@@ -2284,30 +2278,25 @@ async def delete_recurring_task(recurring_id: str, db: Session = Depends(get_db)
     # Remove from scheduler
     remove_recurring_task_from_scheduler(recurring_id)
 
-    # Find and delete all incomplete tasks spawned from this recurring task
+    # When deleting, mark incomplete spawned tasks as CANCELED to preserve history
     runs = db.query(RecurringTaskRun).filter(
         RecurringTaskRun.recurring_task_id == recurring_id
     ).all()
     
-    deleted_task_ids = []
+    canceled_task_ids = []
     for run in runs:
         if run.task_id:
             task = db.query(Task).filter(Task.id == run.task_id).first()
-            if task and task.status not in [TaskStatus.DONE]:
-                deleted_task_ids.append(task.id)
-                db.delete(task)
-    
-    # Delete all run records
-    db.query(RecurringTaskRun).filter(
-        RecurringTaskRun.recurring_task_id == recurring_id
-    ).delete()
+            if task and task.status not in [TaskStatus.DONE, TaskStatus.CANCELED]:
+                task.status = TaskStatus.CANCELED
+                canceled_task_ids.append(task.id)
     
     db.delete(rt)
     db.commit()
     
-    # Broadcast deletions
-    for task_id in deleted_task_ids:
-        await manager.broadcast({"type": "task_deleted", "data": {"id": task_id}})
+    # Broadcast task updates and recurring deletion
+    for task_id in canceled_task_ids:
+        await manager.broadcast({"type": "task_updated", "data": {"id": task_id, "status": "CANCELED"}})
     await manager.broadcast({"type": "recurring_deleted", "data": {"id": recurring_id}})
     
     return {"ok": True}
