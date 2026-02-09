@@ -17,6 +17,10 @@ import time
 import subprocess
 import re
 from croniter import croniter
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.jobstores.base import JobLookupError
 
 from database import init_db, get_db, SessionLocal
 from models import (
@@ -55,6 +59,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Global Scheduler
+scheduler = AsyncIOScheduler()
 
 # WebSocket connections
 class ConnectionManager:
@@ -370,10 +377,24 @@ Post an activity with 'completed' or 'done' in the message - the system will aut
 async def startup():
     init_db()
     print("ClawController API started")
+
     # Start background monitors
     asyncio.create_task(openclaw_session_monitor())
     asyncio.create_task(start_gateway_watchdog())
-    asyncio.create_task(recurring_task_scheduler())
+
+    # Initialize and start APScheduler
+    scheduler.start()
+    print("APScheduler started")
+
+    # Load active recurring tasks into scheduler
+    db = SessionLocal()
+    try:
+        active_tasks = db.query(RecurringTask).filter(RecurringTask.is_active == True).all()
+        for rt in active_tasks:
+            add_recurring_task_to_scheduler(rt)
+        print(f"Loaded {len(active_tasks)} recurring tasks into scheduler")
+    finally:
+        db.close()
 
 async def openclaw_session_monitor():
     """Background task that monitors OpenClaw sessions to detect agent activity.
@@ -450,96 +471,130 @@ async def openclaw_session_monitor():
         except Exception as e:
             print(f"Session monitor error: {e}")
 
-async def recurring_task_scheduler():
-    """Background task that polls for due recurring tasks and spawns new tasks."""
-    print("Recurring task scheduler started")
+async def job_spawn_task(recurring_task_id: str):
+    """Job function called by APScheduler to spawn a task from a recurring template."""
+    db = SessionLocal()
+    try:
+        rt = db.query(RecurringTask).filter(RecurringTask.id == recurring_task_id).first()
+        if not rt or not rt.is_active:
+            return
 
-    while True:
+        now = datetime.utcnow()
         try:
-            await asyncio.sleep(45)  # Poll every 45 seconds
+            # Spawn new task
+            task = Task(
+                title=rt.title,
+                description=rt.description,
+                priority=rt.priority,
+                tags=rt.tags,
+                assignee_id=rt.assignee_id,
+                status=TaskStatus.ASSIGNED if rt.assignee_id else TaskStatus.INBOX,
+                reviewer_id='main',
+                reviewer='main',
+                task_definition=rt.task_definition,
+                parameters=rt.parameters,
+                owner_id=rt.owner_id
+            )
+            db.add(task)
+            db.flush() # Get task ID
 
-            db = SessionLocal()
-            try:
-                now = datetime.utcnow()
-                # Find active recurring tasks that are due
-                due_tasks = db.query(RecurringTask).filter(
-                    RecurringTask.is_active == True,
-                    RecurringTask.next_run_at <= now
-                ).all()
+            # Record the run
+            run = RecurringTaskRun(
+                recurring_task_id=rt.id,
+                task_id=task.id,
+                execution_time=now,
+                status="success"
+            )
+            db.add(run)
 
-                for rt in due_tasks:
-                    try:
-                        # Spawn new task
-                        task = Task(
-                            title=rt.title,
-                            description=rt.description,
-                            priority=rt.priority,
-                            tags=rt.tags,
-                            assignee_id=rt.assignee_id,
-                            status=TaskStatus.ASSIGNED if rt.assignee_id else TaskStatus.INBOX,
-                            reviewer_id='main',
-                            reviewer='main',
-                            task_definition=rt.task_definition,
-                            parameters=rt.parameters,
-                            owner_id=rt.owner_id
-                        )
-                        db.add(task)
-                        db.flush() # Get task ID
+            # Update recurring task stats
+            rt.last_run_at = now
+            rt.run_count += 1
 
-                        # Record the run
-                        run = RecurringTaskRun(
-                            recurring_task_id=rt.id,
-                            task_id=task.id,
-                            execution_time=now,
-                            status="success"
-                        )
-                        db.add(run)
+            # Update next_run_at from APScheduler job
+            job = scheduler.get_job(f"recurring_{rt.id}")
+            if job and job.next_run_time:
+                rt.next_run_at = job.next_run_time.replace(tzinfo=None)
 
-                        # Update recurring task
-                        rt.last_run_at = now
-                        rt.run_count += 1
-                        rt.next_run_at = calculate_next_run(rt.schedule_type, rt.schedule_value, rt.schedule_time)
+            db.commit()
 
-                        db.commit()
+            print(f"Scheduler: Spawned task '{task.title}' from recurring task {rt.id}")
 
-                        print(f"Scheduler: Spawned task '{task.title}' from recurring task {rt.id}")
+            # Log to general activity feed
+            await log_activity(
+                db,
+                "task_created",
+                task_id=task.id,
+                description=f"Task spawned from recurring schedule: {task.title}"
+            )
 
-                        # Log to general activity feed
-                        await log_activity(
-                            db,
-                            "task_created",
-                            task_id=task.id,
-                            description=f"Task spawned from recurring schedule: {task.title}"
-                        )
+            # Broadcast
+            await manager.broadcast({"type": "task_created", "data": {"id": task.id, "title": task.title}})
+            await manager.broadcast({"type": "recurring_run", "data": {"id": rt.id, "task_id": task.id}})
 
-                        # Broadcast
-                        await manager.broadcast({"type": "task_created", "data": {"id": task.id, "title": task.title}})
-                        await manager.broadcast({"type": "recurring_run", "data": {"id": rt.id, "task_id": task.id}})
-
-                        # Notify assignee if any
-                        if task.assignee_id:
-                            notify_agent_of_task(task)
-
-                    except Exception as e:
-                        db.rollback()
-                        print(f"Error processing recurring task {rt.id}: {e}")
-                        # Record failure
-                        try:
-                            run = RecurringTaskRun(
-                                recurring_task_id=rt.id,
-                                status="failed",
-                                execution_time=now
-                            )
-                            db.add(run)
-                            db.commit()
-                        except:
-                            db.rollback()
-
-            finally:
-                db.close()
+            # Notify assignee if any
+            if task.assignee_id:
+                notify_agent_of_task(task)
 
         except Exception as e:
-            print(f"Recurring task scheduler error: {e}")
+            db.rollback()
+            print(f"Error spawning task for recurring task {rt.id}: {e}")
+            # Record failure
+            try:
+                run = RecurringTaskRun(
+                    recurring_task_id=rt.id,
+                    status="failed",
+                    execution_time=now
+                )
+                db.add(run)
+                db.commit()
+            except:
+                db.rollback()
+    finally:
+        db.close()
+
+def get_scheduler_trigger(rt: RecurringTask):
+    """Convert recurring task schedule info into an APScheduler trigger."""
+    try:
+        if rt.schedule_type == "cron":
+            return CronTrigger.from_crontab(rt.schedule_value)
+        elif rt.schedule_type == "interval":
+            return IntervalTrigger(seconds=int(rt.schedule_value or 60))
+        elif rt.schedule_type == "daily":
+            hour, minute = map(int, (rt.schedule_time or "00:00").split(':'))
+            return CronTrigger(hour=hour, minute=minute)
+        elif rt.schedule_type == "weekly":
+            # rt.schedule_value is comma-separated days 0-6
+            hour, minute = map(int, (rt.schedule_time or "00:00").split(':'))
+            return CronTrigger(day_of_week=rt.schedule_value, hour=hour, minute=minute)
+        elif rt.schedule_type == "hourly":
+            return IntervalTrigger(hours=int(rt.schedule_value or 1))
+    except Exception as e:
+        print(f"Failed to create trigger for recurring task {rt.id}: {e}")
+    return None
+
+def add_recurring_task_to_scheduler(rt: RecurringTask):
+    """Add or update a recurring task in APScheduler."""
+    trigger = get_scheduler_trigger(rt)
+    if not trigger:
+        return
+
+    scheduler.add_job(
+        job_spawn_task,
+        trigger=trigger,
+        args=[rt.id],
+        id=f"recurring_{rt.id}",
+        replace_existing=True,
+        misfire_grace_time=60,
+        coalesce=True
+    )
+
+def remove_recurring_task_from_scheduler(rt_id: str):
+    """Remove a recurring task from APScheduler."""
+    try:
+        scheduler.remove_job(f"recurring_{rt_id}")
+    except JobLookupError:
+        pass
 
 # WebSocket endpoint
 @app.websocket("/ws")
@@ -2082,12 +2137,6 @@ def list_recurring_tasks(db: Session = Depends(get_db)):
 @app.post("/api/recurring")
 async def create_recurring_task(task_data: RecurringTaskCreate, db: Session = Depends(get_db)):
     """Create a new recurring task."""
-    next_run = calculate_next_run(
-        task_data.schedule_type,
-        task_data.schedule_value,
-        task_data.schedule_time
-    )
-    
     recurring_task = RecurringTask(
         title=task_data.title,
         description=task_data.description,
@@ -2097,7 +2146,6 @@ async def create_recurring_task(task_data: RecurringTaskCreate, db: Session = De
         schedule_type=task_data.schedule_type,
         schedule_value=task_data.schedule_value,
         schedule_time=task_data.schedule_time,
-        next_run_at=next_run,
         task_definition=task_data.task_definition,
         parameters=task_data.parameters,
         owner_id=task_data.owner_id
@@ -2106,20 +2154,25 @@ async def create_recurring_task(task_data: RecurringTaskCreate, db: Session = De
     db.commit()
     db.refresh(recurring_task)
     
+    # Add to APScheduler
+    add_recurring_task_to_scheduler(recurring_task)
+
+    # Sync next_run_at from scheduler back to DB
+    job = scheduler.get_job(f"recurring_{recurring_task.id}")
+    if job and job.next_run_time:
+        recurring_task.next_run_at = job.next_run_time.replace(tzinfo=None)
+        db.commit()
+
     # Note: Not logging to activity feed - recurring task management stays in its own panel
     await manager.broadcast({
         "type": "recurring_created",
         "data": {"id": recurring_task.id, "title": recurring_task.title}
     })
     
-    # NOTE: This is where OpenClaw cron integration would hook in.
-    # The cron job would check for recurring tasks with next_run_at <= now
-    # and spawn new task instances.
-    
     return {
         "id": recurring_task.id,
         "title": recurring_task.title,
-        "next_run_at": recurring_task.next_run_at.isoformat()
+        "next_run_at": recurring_task.next_run_at.isoformat() if recurring_task.next_run_at else None
     }
 
 @app.get("/api/recurring/{recurring_id}")
@@ -2181,10 +2234,19 @@ async def update_recurring_task(recurring_id: str, task_data: RecurringTaskUpdat
         rt.parameters = task_data.parameters
     if task_data.owner_id is not None:
         rt.owner_id = task_data.owner_id
+
+    # Manage APScheduler jobs based on activity
+    if rt.is_active:
+        add_recurring_task_to_scheduler(rt)
+        # Update next_run_at from scheduler
+        job = scheduler.get_job(f"recurring_{rt.id}")
+        if job and job.next_run_time:
+            rt.next_run_at = job.next_run_time.replace(tzinfo=None)
+    else:
+        remove_recurring_task_from_scheduler(rt.id)
+        rt.next_run_at = None
         
-    # When pausing, remove incomplete spawned tasks from the board
-    if task_data.is_active is False:
-        # Find all tasks spawned from this recurring task that aren't complete
+        # When pausing, remove incomplete spawned tasks from the board
         runs = db.query(RecurringTaskRun).filter(
             RecurringTaskRun.recurring_task_id == recurring_id
         ).all()
@@ -2207,14 +2269,6 @@ async def update_recurring_task(recurring_id: str, task_data: RecurringTaskUpdat
         for task_id in deleted_task_ids:
             await manager.broadcast({"type": "task_deleted", "data": {"id": task_id}})
     
-    # Recalculate next run if schedule changed
-    if any([task_data.schedule_type, task_data.schedule_value, task_data.schedule_time]):
-        rt.next_run_at = calculate_next_run(
-            rt.schedule_type,
-            rt.schedule_value,
-            rt.schedule_time
-        )
-    
     db.commit()
     await manager.broadcast({"type": "recurring_updated", "data": {"id": recurring_id}})
     
@@ -2227,6 +2281,9 @@ async def delete_recurring_task(recurring_id: str, db: Session = Depends(get_db)
     if not rt:
         raise HTTPException(status_code=404, detail="Recurring task not found")
     
+    # Remove from scheduler
+    remove_recurring_task_from_scheduler(recurring_id)
+
     # Find and delete all incomplete tasks spawned from this recurring task
     runs = db.query(RecurringTaskRun).filter(
         RecurringTaskRun.recurring_task_id == recurring_id
@@ -2236,7 +2293,7 @@ async def delete_recurring_task(recurring_id: str, db: Session = Depends(get_db)
     for run in runs:
         if run.task_id:
             task = db.query(Task).filter(Task.id == run.task_id).first()
-            if task and task.status not in [TaskStatus.COMPLETE]:
+            if task and task.status not in [TaskStatus.DONE]:
                 deleted_task_ids.append(task.id)
                 db.delete(task)
     
@@ -2287,6 +2344,24 @@ def get_recurring_task_runs(recurring_id: str, limit: int = 20, db: Session = De
         })
     
     return result
+
+@app.get("/api/scheduler/status")
+def get_scheduler_status():
+    """Get the current status of the background task scheduler."""
+    jobs = []
+    for job in scheduler.get_jobs():
+        jobs.append({
+            "id": job.id,
+            "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+            "name": job.name,
+            "misfire_grace_time": job.misfire_grace_time,
+            "coalesce": job.coalesce
+        })
+    return {
+        "running": scheduler.running,
+        "job_count": len(jobs),
+        "jobs": jobs
+    }
 
 @app.post("/api/recurring/{recurring_id}/trigger")
 async def trigger_recurring_task(recurring_id: str, db: Session = Depends(get_db)):
