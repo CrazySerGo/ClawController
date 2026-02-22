@@ -17,6 +17,10 @@ echo ""
 # Create logs directory
 mkdir -p "$LOGS_DIR"
 
+# Ensure backend data directory is writable
+mkdir -p "$BACKEND_DIR/data"
+chmod 775 "$BACKEND_DIR/data" || true
+
 # Check if setup has been run
 if [ ! -d "$BACKEND_DIR/venv" ]; then
     echo "❌ Backend not set up. Run: clawcontroller setup"

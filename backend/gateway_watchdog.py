@@ -187,7 +187,7 @@ Manual restart: `openclaw gateway restart`
 View watchdog status in ClawController dashboard."""
             
             subprocess.Popen(
-                ["openclaw", "agent", "--agent", "main", "--message", message],
+                ["openclaw", "agent", "--agent=main", f"--message={message}"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 cwd=str(Path.home())
@@ -214,7 +214,7 @@ View watchdog status in ClawController dashboard."""
 Gateway is now healthy and operational."""
             
             subprocess.Popen(
-                ["openclaw", "agent", "--agent", "main", "--message", message],
+                ["openclaw", "agent", "--agent=main", f"--message={message}"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 cwd=str(Path.home())
